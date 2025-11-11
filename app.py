@@ -171,7 +171,7 @@ def load_jira_data():
     return df
 
 
-# --- 5b. Load All-Time Jira Data (30-day window) ---
+# --- 5b. Load All-Time Jira Data (UPDATED) ---
 @st.cache_data(ttl=300)
 @retry(
     wait=wait_fixed(2), 
@@ -182,18 +182,11 @@ def load_all_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    # JQL now filtered for 30 days for speed and accuracy
+    # --- UPDATED JQL QUERY ---
+    # Now finds tickets CREATED today OR RESOLVED today.
+    # This is much faster and more accurate for our "Today" metrics.
     jql_query = """
-        project = TKTS AND created >= -30d AND status IN (
-            "Open",
-            "In Progress",
-            "Reopened",
-            "Waiting for support",
-            "Waiting for customer",
-            "Campaign/request closed",
-            "Resolved",
-            "Closed"
-        )
+        project = TKTS AND (created >= startOfDay() OR resolutiondate >= startOfDay())
     """
 
     # --- UPDATED: Added assignee and issuetype ---
