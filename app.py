@@ -3,12 +3,20 @@ import requests
 import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 # --- 1. NEW IMPORT ---
 from streamlit_autorefresh import st_autorefresh
 from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type, RetryError
 import re # --- NEW --- (For search)
+import os.path
+import base64 # <-- NEW: For reading email body
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+# --- END OF NEW SECTION ---
 
 # --- 2. Page Configuration ---
 st.set_page_config(
@@ -338,8 +346,127 @@ def get_ticket_details(ticket_key):
         "Resolved": resolved_date
     }
 
+# --- START OF NEW/UPDATED GMAIL SECTION ---
+# --- 5e. GMAIL - Authentication ---
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
-# --- 6. CSS (REVERTED TO DEFAULT FONT & HIDING FILTERS) ---
+@st.cache_resource
+def get_gmail_service():
+    """Builds and returns a Gmail API service object.
+       Uses @st.cache_resource to only do this once.
+    """
+    creds = None
+    # Check if the token is in Streamlit's secrets
+    if 'GMAIL_TOKEN' in st.secrets:
+        # Load credentials from the Streamlit secret
+        creds_json = st.secrets['GMAIL_TOKEN']
+        creds = Credentials.from_authorized_user_info(json.loads(creds_json), SCOPES)
+
+    if not creds:
+        # Don't stop the app, just return None. We'll handle this gracefully.
+        print("Gmail token not found in Streamlit Secrets.")
+        return None
+    
+    try:
+        service = build('gmail', 'v1', credentials=creds)
+        return service
+    except HttpError as error:
+        print(f"An error occurred building the Gmail service: {error}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return None
+
+# --- 5f. GMAIL - Helper function to parse email body ---
+def get_email_body(payload):
+    """
+    Recursively searches a Gmail message payload for the 'text/plain' part
+    and decodes it from base64.
+    """
+    body = ""
+    if 'parts' in payload:
+        for part in payload['parts']:
+            body += get_email_body(part) # Recursive call
+    elif payload.get('mimeType') == 'text/plain':
+        data = payload.get('body', {}).get('data')
+        if data:
+            body += base64.urlsafe_b64decode(data).decode('utf-8')
+    return body
+
+# --- 5g. GMAIL - Priority Ticket Counter (UPDATED) ---
+@st.cache_data(ttl=300) # Refresh every 5 minutes
+def get_priority_ticket_count(service, today_str):
+    """
+    Searches Gmail for priority tickets for the given day and returns a unique count.
+    """
+    if not service:
+        return 0
+
+    # --- UPDATED: Broader query (removed 'to:' and 'in:inbox', added 'Urgent') ---
+    query = f'(to:adops-ea@miqdigital.com OR to:adops-emea@miqdigital.com) ("priority" OR "prioritise" OR "Urgent") in:inbox after:{today_str}'
+    
+    try:
+        # Search for messages
+        results = service.users().messages().list(userId='me', q=query).execute()
+        messages = results.get('messages', [])
+        
+        if not messages:
+            return 0 # No priority emails today
+
+        unique_ticket_ids = set()
+        
+        # Regex to find TKTS-#####
+        ticket_regex = re.compile(r'TKTS-\d+', re.IGNORECASE)
+        
+        # We use a batch request to get all message snippets at once
+        batch = service.new_batch_http_request()
+        
+        def add_tickets_to_set(request_id, response, exception):
+            if exception is None:
+                # Get Subject
+                subject = ""
+                headers = response.get('payload', {}).get('headers', [])
+                for h in headers:
+                    if h['name'].lower() == 'subject':
+                        subject = h['value']
+                        break
+                
+                # Get FULL body
+                payload = response.get('payload', {})
+                body = get_email_body(payload)
+                
+                # Search Subject + Full Body
+                search_text = subject + " " + body
+                
+                # Find all "TKTS-XXXX" patterns
+                found_tickets = ticket_regex.findall(search_text)
+                if found_tickets:
+                    for ticket in found_tickets:
+                        unique_ticket_ids.add(ticket.upper())
+            else:
+                # Don't show an error, just log it to the Streamlit console
+                print(f"Warning: Failed to get email part: {exception}")
+
+        # Limit to 50 results to be safe and fast
+        for message in messages[:50]:
+            # Request 'full' format to get the body
+            batch.add(service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set)
+        
+        batch.execute()
+
+        return len(unique_ticket_ids)
+
+    except HttpError as error:
+        # Don't stop the app, just log the error and return 0
+        print(f"An error occurred searching Gmail: {error}")
+        return 0
+    except Exception as e:
+        print(f"An error occurred parsing Gmail messages: {e}")
+        return 0
+# --- END OF NEW/UPDATED GMAIL SECTION ---
+
+
+# --- 6. CSS (UPDATED FOR MANROPE FONT & ALL ICON FIXES) ---
 st.markdown("""
 <style>
 /* --- NEW: Import Manrope from Google Fonts --- */
@@ -359,10 +486,10 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* --- 3. TABLE CONTENT (st.dataframe) --- */
-/* This rule REVERTS the table font back to default to avoid conflicts */
+/* This rule sets the font family for the table */
 div[data-baseweb="data-table"] * {
-    font-family: sans-serif !important; 
-    font-weight: 400 !important; /* Force readable weight */
+    font-family: 'Manrope', Arial, sans-serif !important;
+    font-weight: 400 !important; /* Force table text to be readable */
 }
 
 /* --- 4. NEW: CENTER HIGHLIGHTS SECTION --- */
@@ -377,23 +504,27 @@ div[data-baseweb="data-table"] * {
     display: inline-block; /* Makes the left-aligned list block center-able */
 }
 
-/* --- 5. NEW: HIDE ALL BROKEN TABLE ICONS --- */
-/* Hides the sort/filter icons in table headers */
-[data-testid="stColumnHeaderSortIcon"] {
-    display: none !important;
-}
-/* Hides the 3-dot (...) menu button in table headers */
-[data-testid="stColumnHeaderMenuButton"] {
-    display: none !important;
+/* --- 5. UPDATED: FIX ALL ICONS --- */
+
+/* This rule targets elements with BOTH a Streamlit class AND the icon class */
+div[data-testid="stExpander"] [class*="material-icons"] {
+    font-family: 'Material Icons' !important;
+    font-weight: 400 !important; /* Reset weight for the icon itself */
 }
 
-/* --- 6. NEW: FIX SELECTBOX (DROPDOWN) ICON --- */
 /* This fixes the dropdown arrow in all select boxes */
 div[data-testid="stSelectbox"] [data-testid="stSvgIcon"] {
     font-family: 'Material Icons' !important; /* Use the correct font */
     font-weight: 400 !important; /* Reset weight for the icon */
     font-size: 24px !important; /* Ensure it's the right size */
 }
+
+/* This fixes the table icons */
+div[data-baseweb="data-table"] span[class*="material-icons"] {
+    font-family: 'Material Icons' !important;
+    font-weight: 400 !important; /* Reset weight for the icon itself */
+}
+/* --- END ICON FIXES --- */
 
 
 /* --- ADDED: Header CSS --- */
@@ -490,7 +621,7 @@ st.markdown(
 )
 
 
-# --- 8. Load Data (UPDATED FOR RESILIENCY) ---
+# --- 8. Load Data (UPDATED FOR GMAIL) ---
 # Define default empty DataFrames
 df = pd.DataFrame(columns=[
     "key", "status", "assignee", "created", "request_type", 
@@ -535,6 +666,24 @@ except RetryError as e:
     st.error(f"Failed to fetch DAILY metrics: {error_details}", icon="📉")
 except Exception as e:
     st.error(f"Error loading DAILY metrics: {e}", icon="📉")
+
+# --- START OF NEW SECTION (Gmail) ---
+# --- Block 3: Load Priority Tickets ---
+priority_count = 0 # Default value
+gmail_service = get_gmail_service()
+if gmail_service is None:
+    # Show a visible warning on the app if the service failed to build
+    st.warning("Could not connect to Gmail API. 'Priority TKTS' count will be 0. Check GMAIL_TOKEN secret.", icon="📧")
+else:
+    try:
+        # Use UTC for a consistent "today"
+        today_str = datetime.now(timezone.utc).strftime('%Y/%m/%d')
+        priority_count = get_priority_ticket_count(gmail_service, today_str)
+    except Exception as e:
+        # Catch-all to ensure the app never crashes from Gmail
+        st.warning(f"Could not fetch priority ticket count: {e}", icon="📧")
+# --- END OF NEW SECTION ---
+
 
 # --- Stop only if BOTH fail and we have no data at all ---
 if df.empty and df_all.empty:
@@ -586,8 +735,8 @@ tab_dashboard, tab_explorer, tab_lookup = st.tabs(["SUMMARY", "EXPLORE", "TICKET
 with tab_dashboard:
     # --- UPDATED: Metrics Section with centered content ---
     with st.container(border=True):
-        # Create 7 columns: 1 blank, 5 for content, 1 blank
-        _, col1, col2, col3, col4, col5, _ = st.columns([1, 2, 2, 2, 2, 2, 1])
+        # --- UPDATED: Create 8 columns for 6 metrics ---
+        _, col1, col2, col3, col4, col5, col6, _ = st.columns([1, 2, 2, 2, 2, 2, 2, 1])
         
         # --- UPDATED MARKDOWN: Wrapped in a single centered div ---
         col1.markdown(f"""
@@ -622,6 +771,14 @@ with tab_dashboard:
         <div style='text-align:center;'>
             <h3 style='color:purple; margin-bottom:0px; padding-bottom:0px;'>{closed_today_count}</h3>
             <p style='margin-top:0px; padding-top:0px;'>TKTS Closed Today</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # --- NEW: Priority Ticket Metric ---
+        col6.markdown(f"""
+        <div style='text-align:center;'>
+            <h3 style='color:#FFC300; margin-bottom:0px; padding-bottom:0px;'>{priority_count}</h3>
+            <p style='margin-top:0px; padding-top:0px;'>Priority TKTS Today</p>
         </div>
         """, unsafe_allow_html=True)
 
