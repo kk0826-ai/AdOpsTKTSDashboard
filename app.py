@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
-from datetime import datetime, timezone
+from datetime import datetime, timezone # <-- NEW IMPORT
 import json
 # --- 1. NEW IMPORT ---
 from streamlit_autorefresh import st_autorefresh
@@ -184,7 +184,6 @@ def load_all_jira_data():
 
     # --- UPDATED JQL QUERY ---
     # Now finds tickets CREATED today OR RESOLVED today.
-    # This is much faster and more accurate for our "Today" metrics.
     jql_query = """
         project = TKTS AND (created >= startOfDay() OR resolutiondate >= startOfDay())
     """
@@ -716,7 +715,10 @@ today = pd.Timestamp.now(tz='UTC').date()
 df_all["created_date"] = df_all["created"].dt.date
 df_all["resolved_date"] = df_all["resolutiondate"].dt.date
 
-created_today_count = len(df_all[df_all["created_date"] == today])
+# --- UPDATED: Filtered count for "Created Today" ---
+all_created_today_df = df_all[df_all["created_date"] == today]
+filtered_created_today_df = all_created_today_df[all_created_today_df['request_type'] != "China - Outbound"]
+created_today_count = len(filtered_created_today_df)
 
 # --- UPDATED: Filtered count for "Closed Today" ---
 all_closed_today_df = df_all[df_all["resolved_date"] == today]
@@ -1039,7 +1041,7 @@ with tab_explorer:
 
     # --- Section 2: NEW Daily Closed Ticket Report (Using User's Idea) ---
     st.header(f"Today's Closed Tickets ({today.strftime('%d-%b-%Y')})")
-    st.caption("This report uses data from tickets created or resolved in the last 30 days.")
+    st.caption("This report uses data from tickets created or resolved today.")
     
     with st.container(border=True):
         if df_all.empty:
@@ -1092,7 +1094,34 @@ with tab_explorer:
                             "Ticket Link": st.column_config.LinkColumn(
                                 "",
                                 help="Click to open Jira ticket",
-                                display_text="Open ↗"
+                                display_text="Open Example of how priority emails looks likes
+Email sub - Re: TKTS-52028 ALJ - IBP Tactical - Display - Nov - 11Nov
+Email content - Hi Team,
+Kindly prioritise this ticket.
+Thanks.
+Example email 2
+Email sub - Priority Traffick TKTS-51698
+Hey team,
+Hope you're well!
+yet another deloitte priority traffick!
+
+Thanks,
+Tom
+Example email 3
+Email sub - Priority ticket request: Pillow Talk Click Frenzy
+Email content - Hi Team,
+
+Can you please traffick these below priority tickets
+for a Pillow Talk Click Frenzy Sale starting tomorrow 11th of
+November:
+BVOD: TKTS-51974
+Display: TKTS-51977
+Social Boost: TKTS-51979
+Please let me know once this has been actioned and
+thank you kindly in advance!
+Thanks,
+hope you see the patern here, a simple email contain a single ticket, or multiple ticket id's. at times in the email they will just mention the id without TKTS or at times they mention the ticket id in the email sub and in the email content and when we respond to the email depends on the individual they will replay saying I am picking the ticke or they will say I am picking so on so ticket by mentioning the ticket ID, so I am wondering how do u handle all these different scenarios and count and display the no of priority tickets in a given day
+ ↗"
                             )
                         }
                     )
