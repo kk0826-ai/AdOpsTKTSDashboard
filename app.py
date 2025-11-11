@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
-from datetime import datetime, timezone
+from datetime import datetime, timezone # <-- NEW IMPORT
 import json
 # --- 1. NEW IMPORT ---
 from streamlit_autorefresh import st_autorefresh
@@ -402,13 +402,16 @@ def get_priority_ticket_count(_service, today_str): # <-- CHANGED: 'service' to 
     if not _service: # <-- CHANGED: 'service' to '_service'
         return 0
 
-    # --- UPDATED: Added "Urgent" to the query ---
-    query = f'(to:adops-ea@miqdigital.com OR to:adops-emea@miqdigital.com) ("priority" OR "prioritise" OR "Urgent") in:inbox after:{today_str}'
+    # --- UPDATED: Broader query (removed 'in:inbox') ---
+    query = f'(to:adops-ea@miqdigital.com OR to:adops-emea@miqdigital.com) ("priority" OR "prioritise" OR "Urgent") after:{today_str}'
+    print(f"GMAIL QUERY: {query}") # For debugging in logs
     
     try:
         # Search for messages
         results = _service.users().messages().list(userId='me', q=query).execute() # <-- CHANGED
         messages = results.get('messages', [])
+        
+        print(f"Found {len(messages)} matching emails.") # For debugging in logs
         
         if not messages:
             return 0 # No priority emails today
@@ -455,6 +458,7 @@ def get_priority_ticket_count(_service, today_str): # <-- CHANGED: 'service' to 
         
         batch.execute()
 
+        print(f"Found {len(unique_ticket_ids)} unique tickets.") # For debugging
         return len(unique_ticket_ids)
 
     except HttpError as error:
