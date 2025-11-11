@@ -10,16 +10,6 @@ from streamlit_autorefresh import st_autorefresh
 from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type, RetryError
 import re # --- NEW --- (For search)
 
-# --- START OF NEW SECTION (Gmail Imports) ---
-import os.path
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from datetime import timezone # <-- NEW for UTC
-# --- END OF NEW SECTION ---
-
 # --- 2. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
@@ -348,166 +338,27 @@ def get_ticket_details(ticket_key):
         "Resolved": resolved_date
     }
 
-# --- START OF NEW SECTION (Gmail Functions) ---
-# --- 5e. NEW: GMAIL - Authentication ---
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
-@st.cache_resource
-def get_gmail_service():
-    """Builds and returns a Gmail API service object.
-       Uses @st.cache_resource to only do this once.
-    """
-    creds = None
-    # Check if the token is in Streamlit's secrets
-    if 'GMAIL_TOKEN' in st.secrets:
-        # Load credentials from the Streamlit secret
-        creds_json = st.secrets['GMAIL_TOKEN']
-        creds = Credentials.from_authorized_user_info(json.loads(creds_json), SCOPES)
-
-    if not creds:
-        # Don't stop the app, just return None. We'll handle this gracefully.
-        print("Gmail token not found in Streamlit Secrets.")
-        return None
-    
-    try:
-        service = build('gmail', 'v1', credentials=creds)
-        return service
-    except HttpError as error:
-        print(f"An error occurred building the Gmail service: {error}")
-        return None
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        return None
-
-# --- 5f. NEW: GMAIL - Priority Ticket Counter ---
-@st.cache_data(ttl=300) # Refresh every 5 minutes
-def get_priority_ticket_count(service, today_str):
-    """
-    Searches Gmail for priority tickets for the given day and returns a unique count.
-    """
-    if not service:
-        return 0
-
-    # --- UPDATED: Broader query (removed 'to:' and 'in:inbox', added 'Urgent') ---
-    query = f'(adops-ea@miqdigital.com OR adops-emea@miqdigital.com) ("priority" OR "prioritise" OR "Urgent") after:{today_str}'
-    
-    try:
-        # Search for messages
-        results = service.users().messages().list(userId='me', q=query).execute()
-        messages = results.get('messages', [])
-        
-        if not messages:
-            return 0 # No priority emails today
-
-        unique_ticket_ids = set()
-        
-        # Regex to find TKTS-#####
-        ticket_regex = re.compile(r'TKTS-\d+', re.IGNORECASE)
-        
-        # We use a batch request to get all message snippets at once
-        batch = service.new_batch_http_request()
-        
-        def add_tickets_to_set(request_id, response, exception):
-            if exception is None:
-                # Combine subject and snippet to search
-                subject = ""
-                snippet = response.get('snippet', '')
-                headers = response.get('payload', {}).get('headers', [])
-                for h in headers:
-                    if h['name'].lower() == 'subject':
-                        subject = h['value']
-                        break
-                
-                # This searches both Subject and Body Snippet
-                search_text = subject + " " + snippet
-                
-                # Find all "TKTS-XXXX" patterns
-                found_tickets = ticket_regex.findall(search_text)
-                if found_tickets:
-                    for ticket in found_tickets:
-                        unique_ticket_ids.add(ticket.upper())
-            else:
-                # Don't show an error, just log it to the Streamlit console
-                print(f"Warning: Failed to get email part: {exception}")
-
-        # Limit to 50 results to be safe and fast
-        for message in messages[:50]: 
-            batch.add(service.users().messages().get(userId='me', id=message['id'], format='metadata', metadataHeaders=['subject']), callback=add_tickets_to_set)
-        
-        batch.execute()
-
-        return len(unique_ticket_ids)
-
-    except HttpError as error:
-        # Don't stop the app, just log the error and return 0
-        print(f"An error occurred searching Gmail: {error}")
-        return 0
-    except Exception as e:
-        print(f"An error occurred parsing Gmail messages: {e}")
-        return 0
-# --- END OF NEW SECTION ---
-
-
-# --- 6. CSS (UPDATED FOR MANROPE FONT & ALL ICON FIXES) ---
+# --- 6. CSS (REVERTED TO DEFAULT FONT & HIDING FILTERS) ---
 st.markdown("""
 <style>
-/* --- NEW: Import Manrope from Google Fonts --- */
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200;400;500;600&display=swap');
-/* --- NEW: Import Material Icons Font --- */
-@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
-
-/* --- 1. GLOBAL FONT (Applied to body and all st- elements) --- */
-html, body, [class*="st-"] {
-    font-family: 'Manrope', Arial, sans-serif;
-    font-weight: 200; /* Use ExtraLight as the default */
-}
-
-/* --- 2. HEADERS (st.header, st.subheader, custom HTML) --- */
-h1, h2, h3, h4, h5, h6 {
-    font-family: 'Manrope', Arial, sans-serif !important;
-}
-
-/* --- 3. TABLE CONTENT (st.dataframe) --- */
-/* This rule sets the font family for the table */
-div[data-baseweb="data-table"] * {
-    font-family: 'Manrope', Arial, sans-serif !important;
-    font-weight: 400 !important; /* Force table text to be readable */
-}
-
 /* --- 4. NEW: CENTER HIGHLIGHTS SECTION --- */
-/* This targets the columns only inside our new custom div */
 .highlights-container [data-testid="stVerticalBlock"] {
     text-align: center; /* Center-aligns the h3 and the ul block */
 }
 
-/* This finds the <ul> lists that were centered by the rule above */
 .highlights-container [data-testid="stVerticalBlock"] ul {
     text-align: left;      /* Aligns the text *inside* the list to the left */
     display: inline-block; /* Makes the left-aligned list block center-able */
 }
 
-/* --- 5. UPDATED: FIX ALL ICONS --- */
-
-/* This rule targets elements with BOTH a Streamlit class AND the icon class */
-div[data-testid="stExpander"] [class*="material-icons"] {
-    font-family: 'Material Icons' !important;
-    font-weight: 400 !important; /* Reset weight for the icon itself */
+/* --- 5. NEW: HIDE ALL BROKEN TABLE ICONS --- */
+[data-testid="stColumnHeaderSortIcon"] {
+    display: none !important;
 }
-
-/* This fixes the dropdown arrow in all select boxes */
-div[data-testid="stSelectbox"] [data-testid="stSvgIcon"] {
-    font-family: 'Material Icons' !important; /* Use the correct font */
-    font-weight: 400 !important; /* Reset weight for the icon */
-    font-size: 24px !important; /* Ensure it's the right size */
+[data-testid="stColumnHeaderMenuButton"] {
+    display: none !important;
 }
-
-/* This fixes the table icons */
-div[data-baseweb="data-table"] span[class*="material-icons"] {
-    font-family: 'Material Icons' !important;
-    font-weight: 400 !important; /* Reset weight for the icon itself */
-}
-/* --- END ICON FIXES --- */
-
 
 /* --- ADDED: Header CSS --- */
 .header-container {
@@ -522,8 +373,8 @@ div[data-baseweb="data-table"] span[class*="material-icons"] {
     color: white;
     text-align: center;
     font-size: 2.0rem; /* <-- Reduced font size */
-    font-weight: 500;  /* Kept at 500 (Medium) for readability */
-    font-family: 'Manrope', Arial, sans-serif;
+    font-weight: 500;
+    /* font-family is now removed, will use Streamlit default */
 }
 /* --- End Header CSS --- */
 
@@ -603,7 +454,7 @@ st.markdown(
 )
 
 
-# --- 8. Load Data (UPDATED FOR GMAIL) ---
+# --- 8. Load Data (UPDATED FOR RESILIENCY) ---
 # Define default empty DataFrames
 df = pd.DataFrame(columns=[
     "key", "status", "assignee", "created", "request_type", 
@@ -648,24 +499,6 @@ except RetryError as e:
     st.error(f"Failed to fetch DAILY metrics: {error_details}", icon="📉")
 except Exception as e:
     st.error(f"Error loading DAILY metrics: {e}", icon="📉")
-
-# --- START OF NEW SECTION (Gmail) ---
-# --- Block 3: Load Priority Tickets ---
-priority_count = 0 # Default value
-gmail_service = get_gmail_service()
-if gmail_service is None:
-    # Show a visible warning on the app if the service failed to build
-    st.warning("Could not connect to Gmail API. 'Priority TKTS' count will be 0. Check GMAIL_TOKEN secret.", icon="📧")
-else:
-    try:
-        # Use UTC for a consistent "today"
-        today_str = datetime.now(timezone.utc).strftime('%Y/%m/%d')
-        priority_count = get_priority_ticket_count(gmail_service, today_str)
-    except Exception as e:
-        # Catch-all to ensure the app never crashes from Gmail
-        st.warning(f"Could not fetch priority ticket count: {e}", icon="📧")
-# --- END OF NEW SECTION ---
-
 
 # --- Stop only if BOTH fail and we have no data at all ---
 if df.empty and df_all.empty:
@@ -717,8 +550,8 @@ tab_dashboard, tab_explorer, tab_lookup = st.tabs(["SUMMARY", "EXPLORE", "TICKET
 with tab_dashboard:
     # --- UPDATED: Metrics Section with centered content ---
     with st.container(border=True):
-        # --- UPDATED: Create 8 columns for 6 metrics ---
-        _, col1, col2, col3, col4, col5, col6, _ = st.columns([1, 2, 2, 2, 2, 2, 2, 1])
+        # Create 7 columns: 1 blank, 5 for content, 1 blank
+        _, col1, col2, col3, col4, col5, _ = st.columns([1, 2, 2, 2, 2, 2, 1])
         
         # --- UPDATED MARKDOWN: Wrapped in a single centered div ---
         col1.markdown(f"""
@@ -753,14 +586,6 @@ with tab_dashboard:
         <div style='text-align:center;'>
             <h3 style='color:purple; margin-bottom:0px; padding-bottom:0px;'>{closed_today_count}</h3>
             <p style='margin-top:0px; padding-top:0px;'>TKTS Closed Today</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # --- NEW: Priority Ticket Metric ---
-        col6.markdown(f"""
-        <div style='text-align:center;'>
-            <h3 style='color:#FFC300; margin-bottom:0px; padding-bottom:0px;'>{priority_count}</h3>
-            <p style='margin-top:0px; padding-top:0px;'>Priority TKTS Today</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -950,32 +775,7 @@ with tab_dashboard:
                 source.columns = ['assignee', 'Count']
                 
                 chart = alt.Chart(source).mark_bar(size=15).encode( # Added size=15
-                    y=alt.Y('assignee:N', sort='-x', title=None, axis=alt.Axis(labelLimit=300)), # Added labelLimit
-                    x=alt.X('Count:Q', title='Count', axis=alt.Axis(format='d')), # Format X-axis as integer
-                    tooltip=['assignee', 'Count']
-                ).interactive()
-                st.altair_chart(chart, use_container_width=True)
-
-            # --- UPDATED: Bar Chart for Request Type ---
-            with col_request:
-                st.subheader("TKTS/Request type")
-                source_request_type = df['request_type'].value_counts().reset_index()
-                source_request_type.columns = ['request_type', 'Count']
-                
-                chart_request_type = alt.Chart(source_request_type).mark_bar(size=15).encode( # Added size=1Readability */
-}
-/* --- End Header CSS --- */
-
-/* --- FIX: This is the rule that makes the table full-width --- */
-table {
-    width: 100% !important;
-}
-
-/* Remove rounded corners from all containers, tabs, and blocks */
-div[data-testid="stContainer"],
-div[data-testid="stTabs"],
-div[data-testid="stMarkdownContainer"],
-div[data-testid="stHorizontalBlock"],
+                    y=alt.Y('assignee:N', sort='-x', title=None, axis=alt.Axis(labelLimit=3D"stHorizontalBlock"],
 div[data-testid="stVerticalBlock"],
 div[data-testid="stExpander"],
 div[data-testid="stMetric"],
@@ -1042,7 +842,7 @@ st.markdown(
 )
 
 
-# --- 8. Load Data (UPDATED FOR GMAIL) ---
+# --- 8. Load Data (UPDATED FOR RESILIENCY) ---
 # Define default empty DataFrames
 df = pd.DataFrame(columns=[
     "key", "status", "assignee", "created", "request_type", 
@@ -1087,24 +887,6 @@ except RetryError as e:
     st.error(f"Failed to fetch DAILY metrics: {error_details}", icon="📉")
 except Exception as e:
     st.error(f"Error loading DAILY metrics: {e}", icon="📉")
-
-# --- START OF NEW SECTION (Gmail) ---
-# --- Block 3: Load Priority Tickets ---
-priority_count = 0 # Default value
-gmail_service = get_gmail_service()
-if gmail_service is None:
-    # Show a visible warning on the app if the service failed to build
-    st.warning("Could not connect to Gmail API. 'Priority TKTS' count will be 0. Check GMAIL_TOKEN secret.", icon="📧")
-else:
-    try:
-        # Use UTC for a consistent "today"
-        today_str = datetime.now(timezone.utc).strftime('%Y/%m/%d')
-        priority_count = get_priority_ticket_count(gmail_service, today_str)
-    except Exception as e:
-        # Catch-all to ensure the app never crashes from Gmail
-        st.warning(f"Could not fetch priority ticket count: {e}", icon="📧")
-# --- END OF NEW SECTION ---
-
 
 # --- Stop only if BOTH fail and we have no data at all ---
 if df.empty and df_all.empty:
@@ -1156,8 +938,8 @@ tab_dashboard, tab_explorer, tab_lookup = st.tabs(["SUMMARY", "EXPLORE", "TICKET
 with tab_dashboard:
     # --- UPDATED: Metrics Section with centered content ---
     with st.container(border=True):
-        # --- UPDATED: Create 8 columns for 6 metrics ---
-        _, col1, col2, col3, col4, col5, col6, _ = st.columns([1, 2, 2, 2, 2, 2, 2, 1])
+        # Create 7 columns: 1 blank, 5 for content, 1 blank
+        _, col1, col2, col3, col4, col5, _ = st.columns([1, 2, 2, 2, 2, 2, 1])
         
         # --- UPDATED MARKDOWN: Wrapped in a single centered div ---
         col1.markdown(f"""
@@ -1192,14 +974,6 @@ with tab_dashboard:
         <div style='text-align:center;'>
             <h3 style='color:purple; margin-bottom:0px; padding-bottom:0px;'>{closed_today_count}</h3>
             <p style='margin-top:0px; padding-top:0px;'>TKTS Closed Today</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # --- NEW: Priority Ticket Metric ---
-        col6.markdown(f"""
-        <div style='text-align:center;'>
-            <h3 style='color:#FFC300; margin-bottom:0px; padding-bottom:0px;'>{priority_count}</h3>
-            <p style='margin-top:0px; padding-top:0px;'>Priority TKTS Today</p>
         </div>
         """, unsafe_allow_html=True)
 
