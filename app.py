@@ -390,50 +390,40 @@ def get_email_body(payload):
 
 # --- 5g. GMAIL - Priority Ticket Counter (UPDATED) ---
 @st.cache_data(ttl=300) # Refresh every 5 minutes
-def get_priority_ticket_count(_service, today_str): # <-- 'service' to '_service'
+def get_priority_ticket_set(_service, today_str): # <-- CHANGED: Renamed function
     """
-    Searches Gmail for priority tickets for the given day and returns a unique count.
+    Searches Gmail for priority tickets for the given day and returns a *set* of unique ticket IDs.
     """
-    if not _service: # <-- 'service' to '_service'
-        return 0
+    if not _service: 
+        return set() # Return an empty set
 
-    # --- UPDATED: Broader query (removed 'in:inbox') ---
     query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "Urgent") after:{today_str}'
     
     try:
-        # Search for messages
-        results = _service.users().messages().list(userId='me', q=query).execute() # <-- CHANGED
+        results = _service.users().messages().list(userId='me', q=query).execute()
         messages = results.get('messages', [])
         
         if not messages:
-            return 0 # No priority emails today
+            return set() # No priority emails today
 
         unique_ticket_ids = set()
-        
-        # Regex to find TKTS-#####
         ticket_regex = re.compile(r'TKTS-\d+', re.IGNORECASE)
-        
-        batch = _service.new_batch_http_request() # <-- CHANGED
+        batch = _service.new_batch_http_request()
         
         def add_tickets_to_set(request_id, response, exception):
             if exception is None:
-                # Get Subject
                 subject = ""
-                snippet = response.get('snippet', '') # Use snippet as a fallback
+                snippet = response.get('snippet', '')
                 headers = response.get('payload', {}).get('headers', [])
                 for h in headers:
                     if h['name'].lower() == 'subject':
                         subject = h['value']
                         break
                 
-                # Get FULL body
                 payload = response.get('payload', {})
                 body = get_email_body(payload)
-                
-                # Search Subject + Full Body (or snippet if body is empty)
                 search_text = subject + " " + (body if body else snippet)
                 
-                # Find all "TKTS-XXXX" patterns
                 found_tickets = ticket_regex.findall(search_text)
                 if found_tickets:
                     for ticket in found_tickets:
@@ -441,64 +431,20 @@ def get_priority_ticket_count(_service, today_str): # <-- 'service' to '_service
             else:
                 print(f"Warning: Failed to get email part: {exception}")
 
-        for message in messages[:50]: # Limit to 50 results
-            # Request 'full' format to get the body
-            batch.add(_service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set) # <-- CHANGED
+        for message in messages[:50]: 
+            batch.add(_service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set)
         
         batch.execute()
         
-        return len(unique_ticket_ids)
+        return unique_ticket_ids # <-- CHANGED: Return the full set
 
     except HttpError as error:
         print(f"An error occurred searching Gmail: {error}")
-        return 0
+        return set()
     except Exception as e:
         print(f"An error occurred parsing Gmail messages: {e}")
-        return 0
+        return set()
 # --- END OF NEW/UPDATED GMAIL SECTION ---
-
-
-# --- 5h. NEW: Helper Function to build HTML table ---
-def build_html_table(df, columns, link_column_key=None, link_text_col_key=None):
-    """
-    Builds a scrollable HTML table from a DataFrame, with Manrope font
-    and an optional clickable link column.
-    
-    Args:
-        df (pd.DataFrame): The data to display.
-        columns (dict): A dictionary of {data_column_name: display_column_name}
-        link_column_key (str): The name of the column in `df` that contains the URL.
-        link_text_col_key (str): The name of the column in `df` that contains the text for the link.
-    """
-    
-    # Start building the HTML string
-    html = """
-    <div class="table-container">
-        <table class="custom-table">
-            <thead>
-                <tr>
-    """
-    
-    # Column headers
-    for col_name in columns.values():
-        html += f"<th>{col_name}</th>"
-    html += "</tr></thead><tbody>"
-    
-    # Table rows
-    for index, row in df.iterrows():
-        html += "<tr>"
-        for col_key, col_name in columns.items():
-            if col_key == link_column_key:
-                # Create a clickable link
-                url = row[col_key]
-                text = row[link_text_col_key] # Get the text from the link_text_col
-                html += f'<td><a href="{url}" target="_blank">{text}</a></td>'
-            else:
-                html += f"<td>{row[col_key]}</td>"
-        html += "</tr>"
-        
-    html += "</tbody></table></div>"
-    return html
 
 
 # --- 6. CSS (UPDATED FOR MANROPE & HTML TABLE) ---
@@ -560,7 +506,6 @@ h1, h2, h3, h4, h5, h6 {
     text-align: center; /* Center-aligns the h3 and the ul block */
 }
 
-/* This finds the <ul> lists that were centered by the rule above */
 .highlights-container [data-testid="stVerticalBlock"] ul {
     text-align: left;
     display: inline-block;
@@ -713,7 +658,7 @@ except Exception as e:
 
 # --- START OF NEW SECTION (Gmail) ---
 # --- Block 3: Load Priority Tickets ---
-priority_count = 0 # Default value
+priority_ticket_set = set() # Default value
 gmail_service = get_gmail_service()
 if gmail_service is None:
     # Show a visible warning on the app if the service failed to build
@@ -722,10 +667,12 @@ else:
     try:
         # Use UTC for a consistent "today"
         today_str = datetime.now(timezone.utc).strftime('%Y/%m/%d')
-        priority_count = get_priority_ticket_count(gmail_service, today_str)
+        priority_ticket_set = get_priority_ticket_set(gmail_service, today_str)
     except Exception as e:
         # Catch-all to ensure the app never crashes from Gmail
         st.warning(f"Could not fetch priority ticket count: {e}", icon="📧")
+
+priority_count = len(priority_ticket_set) # Get the count from the set
 # --- END OF NEW SECTION ---
 
 
@@ -828,10 +775,13 @@ with tab_dashboard:
         # --- NEW: Priority Ticket Metric ---
         col6.markdown(f"""
         <div style='text-align:center;'>
-            <h3 style='color:#FFC300; margin-bottom:0px; padding-bottom:0px;'>{priority_count}</h3>
+            <h3 style='color:#FFC300; margin-bottom:0px; padding-bottom:0px;'>{priority_count}*</h3>
             <p style='margin-top:0px; padding-top:0px;'>Priority TKTS Today</p>
         </div>
         """, unsafe_allow_html=True)
+
+    # --- NEW: Add caption for the asterisk ---
+    st.caption("*Priority TKTS Today is an estimate based on a search of 'priority' and 'urgent' emails and may not include all intended tickets.")
 
 
     # --- Filter Buttons (Unchanged) ---
@@ -1177,6 +1127,58 @@ with tab_explorer:
                         link_text_col_key="Link Text"
                     )
                     st.markdown(html, unsafe_allow_html=True)
+    
+    st.divider() # <-- NEW DIVIDER
+    
+    # --- Section 3: NEW Priority Ticket Details ---
+    st.header(f"Priority Ticket Details ({today.strftime('%d-%b-%Y')})")
+    st.caption("*Based on 'priority'/'urgent' emails received today. This list may not be complete.")
+    
+    with st.container(border=True):
+        if not priority_ticket_set:
+            st.info("No priority tickets found in emails today.")
+        else:
+            # Create a master list of all tickets we know about
+            all_known_tickets_df = pd.concat([
+                df[['key', 'assignee', 'request_type', 'status', 'Ticket Link']], 
+                df_all[['key', 'assignee', 'request_type', 'status']]
+            ]).drop_duplicates(subset=['key'])
+            
+            # Add Ticket Link for any tickets that only came from df_all
+            all_known_tickets_df['Ticket Link'] = all_known_tickets_df['key'].apply(lambda key: f"{JIRA_DOMAIN}/browse/{key}")
+
+            # Filter this master list for our priority tickets
+            priority_list = list(priority_ticket_set)
+            priority_details_df = all_known_tickets_df[all_known_tickets_df['key'].isin(priority_list)].copy()
+            
+            if priority_details_df.empty:
+                st.warning("Found priority ticket emails, but could not match them to active or recently closed JIRA tickets.")
+                st.write(priority_list) # Show the raw list of IDs it found
+            else:
+                # --- Build HTML Table for Priority Tickets ---
+                final_table_df_priority = pd.DataFrame()
+                final_table_df_priority['Ticket ID'] = priority_details_df['key']
+                final_table_df_priority['Link'] = priority_details_df['Ticket Link'] # The URL
+                final_table_df_priority['Link Text'] = "Open ↗" # The display text
+                final_table_df_priority['Assignee'] = priority_details_df['assignee']
+                final_table_df_priority['Request Type'] = priority_details_df['request_type']
+                final_table_df_priority['Status'] = priority_details_df['status']
+                
+                html_cols_priority = {
+                    'Ticket ID': 'Ticket ID',
+                    'Link': 'Link',
+                    'Assignee': 'Assignee',
+                    'Request Type': 'Request Type',
+                    'Status': 'Status'
+                }
+
+                html = build_html_table(
+                    final_table_df_priority,
+                    html_cols_priority,
+                    link_column_key="Link",
+                    link_text_col_key="Link Text"
+                )
+                st.markdown(html, unsafe_allow_html=True)
 
 
 # --- NEW: Ticket Lookup Tab ---
