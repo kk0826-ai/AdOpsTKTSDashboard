@@ -458,7 +458,50 @@ def get_priority_ticket_count(_service, today_str): # <-- 'service' to '_service
 # --- END OF NEW/UPDATED GMAIL SECTION ---
 
 
-# --- 6. CSS (UPDATED FOR MANROPE FONT & ALL ICON FIXES) ---
+# --- 5h. NEW: Helper Function to build HTML table ---
+def build_html_table(df, columns, link_column_key=None, link_text_col_key=None):
+    """
+    Builds a scrollable HTML table from a DataFrame, with Manrope font
+    and an optional clickable link column.
+    
+    Args:
+        df (pd.DataFrame): The data to display.
+        columns (dict): A dictionary of {data_column_name: display_column_name}
+        link_column_key (str): The name of the column in `df` that contains the URL.
+        link_text_col_key (str): The name of the column in `df` that contains the text for the link.
+    """
+    
+    # Start building the HTML string
+    html = """
+    <div class="table-container">
+        <table class="custom-table">
+            <thead>
+                <tr>
+    """
+    
+    # Column headers
+    for col_name in columns.values():
+        html += f"<th>{col_name}</th>"
+    html += "</tr></thead><tbody>"
+    
+    # Table rows
+    for index, row in df.iterrows():
+        html += "<tr>"
+        for col_key, col_name in columns.items():
+            if col_key == link_column_key:
+                # Create a clickable link
+                url = row[col_key]
+                text = row[link_text_col_key] # Get the text from the link_text_col
+                html += f'<td><a href="{url}" target="_blank">{text}</a></td>'
+            else:
+                html += f"<td>{row[col_key]}</td>"
+        html += "</tr>"
+        
+    html += "</tbody></table></div>"
+    return html
+
+
+# --- 6. CSS (UPDATED FOR MANROPE & HTML TABLE) ---
 st.markdown("""
 <style>
 /* --- NEW: Import Manrope from Google Fonts --- */
@@ -477,12 +520,39 @@ h1, h2, h3, h4, h5, h6 {
     font-family: 'Manrope', Arial, sans-serif !important;
 }
 
-/* --- 3. TABLE CONTENT (st.dataframe) --- */
-/* This rule sets the font family for the table */
-div[data-baseweb="data-table"] * {
-    font-family: 'Manrope', Arial, sans-serif !important;
-    font-weight: 400 !important; /* Force table text to be readable */
+/* --- 3. NEW: HTML TABLE STYLING --- */
+.table-container {
+    height: 400px; /* Set a fixed height */
+    overflow-y: auto; /* Add a vertical scrollbar */
+    border-radius: 0px; /* Sharp corners */
 }
+.custom-table {
+    width: 100%;
+    border-collapse: collapse; /* Clean lines */
+}
+.custom-table th, .custom-table td {
+    padding: 6px 10px; /* More compact padding */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2); /* Subtle white row separator */
+    text-align: left;
+    font-weight: 400; /* Use Regular 400 for readability */
+    font-size: 0.9rem; /* Smaller font */
+}
+.custom-table th {
+    font-weight: 600; /* Use SemiBold 600 for headers */
+    background-color: #0E1117; /* Match Streamlit's dark header */
+    color: #FFFFFF; /* WHITE text for header */
+    position: sticky; /* Make headers stick */
+    top: 0;
+}
+.custom-table a {
+    color: #58C0ED; /* Bright link color */
+    text-decoration: none;
+    font-weight: 600; /* Make links stand out */
+}
+.custom-table a:hover {
+    text-decoration: underline;
+}
+/* --- END HTML TABLE STYLING --- */
 
 /* --- 4. NEW: CENTER HIGHLIGHTS SECTION --- */
 /* This targets the columns only inside our new custom div */
@@ -492,31 +562,17 @@ div[data-baseweb="data-table"] * {
 
 /* This finds the <ul> lists that were centered by the rule above */
 .highlights-container [data-testid="stVerticalBlock"] ul {
-    text-align: left;      /* Aligns the text *inside* the list to the left */
-    display: inline-block; /* Makes the left-aligned list block center-able */
+    text-align: left;
+    display: inline-block;
 }
 
-/* --- 5. UPDATED: FIX ALL ICONS --- */
-
-/* This rule targets elements with BOTH a Streamlit class AND the icon class */
-div[data-testid="stExpander"] [class*="material-icons"] {
-    font-family: 'Material Icons' !important;
-    font-weight: 400 !important; /* Reset weight for the icon itself */
-}
-
+/* --- 5. NEW: FIX SELECTBOX (DROPDOWN) ICON --- */
 /* This fixes the dropdown arrow in all select boxes */
 div[data-testid="stSelectbox"] [data-testid="stSvgIcon"] {
     font-family: 'Material Icons' !important; /* Use the correct font */
     font-weight: 400 !important; /* Reset weight for the icon */
     font-size: 24px !important; /* Ensure it's the right size */
 }
-
-/* This fixes the table icons */
-div[data-baseweb="data-table"] span[class*="material-icons"] {
-    font-family: 'Material Icons' !important;
-    font-weight: 400 !important; /* Reset weight for the icon itself */
-}
-/* --- END ICON FIXES --- */
 
 
 /* --- ADDED: Header CSS --- */
@@ -525,22 +581,18 @@ div[data-baseweb="data-table"] span[class*="material-icons"] {
     background-image: url('https://i.ibb.co/nMTJF4B9/vj-HZbu8-Imgur.jpg');
     background-size: cover;
     background-position: center;
-    margin-bottom: 1rem; /* Space below header */
-    border-radius: 0px !important; /* Keep it sharp */
+    margin-bottom: 1rem;
+    border-radius: 0px !important;
 }
 .header-text {
     color: white;
     text-align: center;
-    font-size: 2.0rem; /* <-- Reduced font size */
-    font-weight: 500;  /* Kept at 500 (Medium) for readability */
+    font-size: 2.0rem;
+    font-weight: 500;
     font-family: 'Manrope', Arial, sans-serif;
 }
 /* --- End Header CSS --- */
 
-/* --- FIX: This is the rule that makes the table full-width --- */
-table {
-    width: 100% !important;
-}
 
 /* Remove rounded corners from all containers, tabs, and blocks */
 div[data-testid="stContainer"],
@@ -553,8 +605,8 @@ div[data-testid="stMetric"],
 section.main div.block-container,
 div[data-testid="stBorderedStContainer"],
 div[data-testid="stDataFrame"],
-div[data-baseweb="data-table"], /* <-- ✅ NEW: Targets inner dataframe */
-div[data-testid="stAlert"] {      /* <-- ✅ NEW: Targets st.info/st.error */
+div[data-baseweb="data-table"],
+div[data-testid="stAlert"] {
     border-radius: 0px !important;
 }
 
@@ -596,7 +648,7 @@ div[data-testid="stMetricLabel"], div[data-testid="stMetricValue"] {
 /* Make markdown table headers bold and centered */
 table th {
     text-align: center !important;
-    font-weight: 600 !important; /* Kept at 600 (SemiBold) for readability */
+    font-weight: 600 !important;
 }
 
 </style>
@@ -808,42 +860,53 @@ with tab_dashboard:
     else:
         display_df = breached_df
 
-    # --- Use st.dataframe (Unchanged from last version) ---
-    table_cols = ["Ticket", "Ticket Link", "SLA Timer", "status", "assignee", "request_type", "created", "campaign_start_date"]
-    table_df = display_df[table_cols].copy()
+    # --- REPLACED st.dataframe with custom HTML table ---
+    
+    # Create a copy for manipulation
+    table_df = display_df.copy()
     
     # Format dates
     table_df['created'] = table_df['created'].dt.strftime('%d%b%Y %H:%M')
     table_df['campaign_start_date'] = table_df['campaign_start_date'].dt.strftime('%d%b%Y')
+    
+    # Create the link text and link URL
+    table_df["Link_Text"] = "Open ↗" # The text to display
+    
+    # Create a new DataFrame with just the columns we want, in the order we want
+    final_table_df = pd.DataFrame()
+    final_table_df['TKTS'] = table_df['Ticket']
+    final_table_df['Link'] = table_df['Ticket Link'] # The URL
+    final_table_df['Link Text'] = "Open ↗" # The display text
+    final_table_df['SLA Status'] = table_df['SLA Timer']
+    final_table_df['Status'] = table_df['status']
+    final_table_df['Assignee'] = table_df['assignee']
+    final_table_df['Request Type'] = table_df['request_type']
+    final_table_df['Created (UTC)'] = table_df['created']
+    final_table_df['Start Date'] = table_df['campaign_start_date']
 
-    if table_df.empty:
+    # Define the final columns for the HTML builder
+    html_cols = {
+        'TKTS': 'TKTS',
+        'Link': 'Link', # This is the link_column
+        'SLA Status': 'SLA Status',
+        'Status': 'Status',
+        'Assignee': 'Assignee',
+        'Request Type': 'Request Type',
+        'Created (UTC)': 'Created (UTC)',
+        'Start Date': 'Start Date'
+    }
+
+    if final_table_df.empty:
         st.info("No tickets found for this filter.")
     else:
-        st.dataframe(
-            table_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Ticket": st.column_config.TextColumn(
-                    "TKTS",
-                    help="Jira Ticket Key"
-                ),
-                "Ticket Link": st.column_config.LinkColumn(
-                    "",
-                    help="Click to open Jira ticket",
-                    display_text="Open ↗"
-                ),
-                "SLA Timer": "SLA Status",
-                "status": "Status",
-                "assignee": "Assignee",
-                "request_type": "Request Type",
-                "created": "Created (UTC)",
-                "campaign_start_date": st.column_config.TextColumn(
-                    "Start Date",
-                    help="Campaign Start Date (Main or China)"
-                )
-            }
+        html = build_html_table(
+            final_table_df, 
+            html_cols, 
+            link_column_key="Link", 
+            link_text_col_key="Link Text"
         )
+        st.markdown(html, unsafe_allow_html=True)
+
 
     # --- LAYOUT CHANGE: Today's Snapshot moved here ---
     st.divider()
@@ -992,7 +1055,7 @@ with tab_dashboard:
 # --- END OF TAB_DASHBOARD BLOCK ---
 
 
-# --- === MODIFIED tab_explorer (Using User's New Idea) === ---
+# --- === MODIFIED tab_explorer (Using HTML Tables) === ---
 with tab_explorer:
     
     # --- Section 1: Existing Active Ticket Explorer ---
@@ -1012,28 +1075,39 @@ with tab_explorer:
             if selected_assignee:
                 assignee_df = df[df['assignee'] == selected_assignee].sort_values(by='created')
                 
-                table_cols_assignee = ["Ticket", "Ticket Link", "SLA Timer", "status", "request_type", "created", "campaign_start_date"]
-                table_df_assignee = assignee_df[table_cols_assignee].copy()
-                
-                # Format dates
+                # --- REPLACED st.dataframe with custom HTML table ---
+                table_df_assignee = assignee_df.copy()
                 table_df_assignee['created'] = table_df_assignee['created'].dt.strftime('%d%b%Y %H:%M')
                 table_df_assignee['campaign_start_date'] = table_df_assignee['campaign_start_date'].dt.strftime('%d%b%Y')
+                
+                # Create a new DataFrame with just the columns we want
+                final_table_df_active = pd.DataFrame()
+                final_table_df_active['TKTS'] = table_df_assignee['Ticket']
+                final_table_df_active['Link'] = table_df_assignee['Ticket Link'] # The URL
+                final_table_df_active['Link Text'] = "Open ↗" # The display text
+                final_table_df_active['SLA Status'] = table_df_assignee['SLA Timer']
+                final_table_df_active['Status'] = table_df_assignee['status']
+                final_table_df_active['Request Type'] = table_df_assignee['request_type']
+                final_table_df_active['Created (UTC)'] = table_df_assignee['created']
+                final_table_df_active['Start Date'] = table_df_assignee['campaign_start_date']
+                
+                html_cols_active = {
+                    'TKTS': 'TKTS',
+                    'Link': 'Link', # This is the link_column
+                    'SLA Status': 'SLA Status',
+                    'Status': 'Status',
+                    'Request Type': 'Request Type',
+                    'Created (UTC)': 'Created (UTC)',
+                    'Start Date': 'Start Date'
+                }
 
-                st.dataframe(
-                    table_df_assignee,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Ticket": st.column_config.TextColumn("TKTS", help="Jira Ticket Key"),
-                        "Ticket Link": st.column_config.LinkColumn("", help="Click to open Jira ticket", display_text="Open ↗"),
-                        "SLA Timer": "SLA Status",
-                        "status": "Status",
-                        "assignee": "Assignee",
-                        "request_type": "Request Type",
-                        "created": "Created (UTC)",
-                        "campaign_start_date": st.column_config.TextColumn("Start Date", help="Campaign Start Date (Main or China)")
-                    }
+                html = build_html_table(
+                    final_table_df_active,
+                    html_cols_active,
+                    link_column_key="Link",
+                    link_text_col_key="Link Text"
                 )
+                st.markdown(html, unsafe_allow_html=True)
         else:
             st.info("No active tickets to explore.")
             
@@ -1081,23 +1155,28 @@ with tab_explorer:
                     )
                     
                     # 7. Display their tickets in a dataframe
-                    report_df['Ticket Link'] = report_df['key'].apply(lambda key: f"{JIRA_DOMAIN}/browse/{key}")
-                    display_cols = ['key', 'request_type', 'Ticket Link']
+                    report_df['Ticket Link URL'] = report_df['key'].apply(lambda key: f"{JIRA_DOMAIN}/browse/{key}")
                     
-                    st.dataframe(
-                        report_df[display_cols],
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "key": "Ticket ID",
-                            "request_type": "Request Type",
-                            "Ticket Link": st.column_config.LinkColumn(
-                                "",
-                                help="Click to open Jira ticket",
-                                display_text="Open ↗"
-                            )
-                        }
+                    # --- REPLACED st.dataframe with custom HTML table ---
+                    final_table_df_closed = pd.DataFrame()
+                    final_table_df_closed['Ticket ID'] = report_df['key']
+                    final_table_df_closed['Request Type'] = report_df['request_type']
+                    final_table_df_closed['Link'] = report_df['Ticket Link URL']
+                    final_table_df_closed['Link Text'] = "Open ↗"
+                    
+                    html_cols_closed = {
+                        'Ticket ID': 'Ticket ID',
+                        'Request Type': 'Request Type',
+                        'Link': 'Link'
+                    }
+
+                    html = build_html_table(
+                        final_table_df_closed,
+                        html_cols_closed,
+                        link_column_key="Link",
+                        link_text_col_key="Link Text"
                     )
+                    st.markdown(html, unsafe_allow_html=True)
 
 
 # --- NEW: Ticket Lookup Tab ---
