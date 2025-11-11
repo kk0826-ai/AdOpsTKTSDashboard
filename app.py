@@ -395,19 +395,19 @@ def get_email_body(payload):
 
 # --- 5g. GMAIL - Priority Ticket Counter (UPDATED) ---
 @st.cache_data(ttl=300) # Refresh every 5 minutes
-def get_priority_ticket_count(service, today_str):
+def get_priority_ticket_count(_service, today_str): # <-- CHANGED: 'service' to '_service'
     """
     Searches Gmail for priority tickets for the given day and returns a unique count.
     """
-    if not service:
+    if not _service: # <-- CHANGED: 'service' to '_service'
         return 0
 
-    # --- UPDATED: Broader query (removed 'to:' and 'in:inbox', added 'Urgent') ---
+    # --- UPDATED: Added "Urgent" to the query ---
     query = f'(to:adops-ea@miqdigital.com OR to:adops-emea@miqdigital.com) ("priority" OR "prioritise" OR "Urgent") in:inbox after:{today_str}'
     
     try:
         # Search for messages
-        results = service.users().messages().list(userId='me', q=query).execute()
+        results = _service.users().messages().list(userId='me', q=query).execute() # <-- CHANGED
         messages = results.get('messages', [])
         
         if not messages:
@@ -419,12 +419,13 @@ def get_priority_ticket_count(service, today_str):
         ticket_regex = re.compile(r'TKTS-\d+', re.IGNORECASE)
         
         # We use a batch request to get all message snippets at once
-        batch = service.new_batch_http_request()
+        batch = _service.new_batch_http_request() # <-- CHANGED
         
         def add_tickets_to_set(request_id, response, exception):
             if exception is None:
                 # Get Subject
                 subject = ""
+                snippet = response.get('snippet', '') # Use snippet as a fallback
                 headers = response.get('payload', {}).get('headers', [])
                 for h in headers:
                     if h['name'].lower() == 'subject':
@@ -435,8 +436,8 @@ def get_priority_ticket_count(service, today_str):
                 payload = response.get('payload', {})
                 body = get_email_body(payload)
                 
-                # Search Subject + Full Body
-                search_text = subject + " " + body
+                # Search Subject + Full Body (or snippet if body is empty)
+                search_text = subject + " " + (body if body else snippet)
                 
                 # Find all "TKTS-XXXX" patterns
                 found_tickets = ticket_regex.findall(search_text)
@@ -448,9 +449,9 @@ def get_priority_ticket_count(service, today_str):
                 print(f"Warning: Failed to get email part: {exception}")
 
         # Limit to 50 results to be safe and fast
-        for message in messages[:50]:
+        for message in messages[:50]: 
             # Request 'full' format to get the body
-            batch.add(service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set)
+            batch.add(_service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set) # <-- CHANGED
         
         batch.execute()
 
