@@ -387,8 +387,8 @@ def get_priority_ticket_count(service, today_str):
     if not service:
         return 0
 
-    # Build the search query
-    query = f'(to:adops-ea@miqdigital.com OR to:adops-emea@miqdigital.com) ("priority" OR "prioritise") in:inbox after:{today_str}'
+    # --- UPDATED: Added "Urgent" to the query ---
+    query = f'(to:adops-ea@miqdigital.com OR to:adops-emea@miqdigital.com) ("priority" OR "prioritise" OR "Urgent") in:inbox after:{today_str}'
     
     try:
         # Search for messages
@@ -410,6 +410,7 @@ def get_priority_ticket_count(service, today_str):
             if exception is None:
                 # Combine subject and snippet to search
                 subject = ""
+                # Use snippet for a quick body check
                 snippet = response.get('snippet', '')
                 headers = response.get('payload', {}).get('headers', [])
                 for h in headers:
@@ -417,6 +418,7 @@ def get_priority_ticket_count(service, today_str):
                         subject = h['value']
                         break
                 
+                # This searches both Subject and Body Snippet
                 search_text = subject + " " + snippet
                 
                 # Find all "TKTS-XXXX" patterns
