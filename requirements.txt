@@ -4,3 +4,5 @@ pandas
 altair
 tenacity
 streamlit-autorefresh
+google-api-python-client
+google-auth-oauthlib
