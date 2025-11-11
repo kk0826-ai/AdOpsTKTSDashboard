@@ -882,7 +882,7 @@ with tab_dashboard:
     # Define the final columns for the HTML builder
     html_cols = {
         'TKTS': 'TKTS',
-        'Link': 'Link', # This is the link_column_key
+        'Link': '', # This is the link_column_key
         'SLA Status': 'SLA',
         'Status': 'Status',
         'Assignee': 'Assignee',
