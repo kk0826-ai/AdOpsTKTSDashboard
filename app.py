@@ -883,7 +883,7 @@ with tab_dashboard:
     html_cols = {
         'TKTS': 'TKTS',
         'Link': 'Link', # This is the link_column_key
-        'SLA Status': 'SLA Status',
+        'SLA Status': 'SLA',
         'Status': 'Status',
         'Assignee': 'Assignee',
         'Request Type': 'Request Type',
@@ -1089,7 +1089,7 @@ with tab_explorer:
                 html_cols_active = {
                     'TKTS': 'TKTS',
                     'Link': '', # This is the link_column_key
-                    'SLA Status': 'SLA Status',
+                    'SLA Status': 'SLA',
                     'Status': 'Status',
                     'Request Type': 'Request Type',
                     'Created (UTC)': 'Created (UTC)',
