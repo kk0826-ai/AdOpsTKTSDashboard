@@ -23,7 +23,7 @@ from googleapiclient.errors import HttpError
 # --- 2. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="🎟️",
+    page_icon="",
     layout="wide",
 )
 
@@ -916,7 +916,7 @@ with tab_dashboard:
 
         # --- Column 1: Top 5 Created Request Types (NOW INDENTED) ---
         with col_created:
-            st.subheader(f"Top 5 Requests type")
+            st.subheader(f"Top 5 Requests types")
             
             # Filter df_all for tickets created today
             created_today_df = df_all[df_all["created_date"] == today]
@@ -1054,7 +1054,7 @@ with tab_dashboard:
 with tab_explorer:
     
     # --- Section 1: Existing Active Ticket Explorer ---
-    st.header("Active Ticket Explorer")
+    st.header("Filter Open TKTS by Assignee")
     with st.container(border=True):
         # Check if df is empty before trying to access 'assignee'
         if not df.empty:
@@ -1088,7 +1088,7 @@ with tab_explorer:
                 
                 html_cols_active = {
                     'TKTS': 'TKTS',
-                    'Link': 'Link', # This is the link_column_key
+                    'Link': '', # This is the link_column_key
                     'SLA Status': 'SLA Status',
                     'Status': 'Status',
                     'Request Type': 'Request Type',
@@ -1109,9 +1109,8 @@ with tab_explorer:
     st.divider()
 
     # --- Section 2: NEW Daily Closed Ticket Report (Using User's Idea) ---
-    st.header(f"Today's Closed Tickets ({today.strftime('%d-%b-%Y')})")
-    st.caption("This report uses data from tickets created or resolved today.")
-    
+    st.header(f"Closed TKTS by Assignee on ({today.strftime('%d-%b-%Y')})")
+
     with st.container(border=True):
         if df_all.empty:
             st.info("No ticket data available to build a report.")
@@ -1160,9 +1159,9 @@ with tab_explorer:
                     final_table_df_closed['Link Text'] = "Open ↗"
                     
                     html_cols_closed = {
-                        'Ticket ID': 'Ticket ID',
+                        'Ticket ID': 'TKTS',
                         'Request Type': 'Request Type',
-                        'Link': 'Link'
+                        'Link': ''
                     }
 
                     html = build_html_table(
@@ -1176,8 +1175,7 @@ with tab_explorer:
     st.divider() 
     
     # --- Section 3: NEW Priority Ticket Details ---
-    st.header(f"Priority Ticket Details ({today.strftime('%d-%b-%Y')})")
-    st.caption("*Based on 'priority'/'urgent' emails received today. This list may not be complete.")
+    st.header(f"Priority TKTS Details ({today.strftime('%d-%b-%Y')})")
     
     with st.container(border=True):
         if not priority_ticket_set:
@@ -1210,8 +1208,8 @@ with tab_explorer:
                 final_table_df_priority['Status'] = priority_details_df['status']
                 
                 html_cols_priority = {
-                    'Ticket ID': 'Ticket ID',
-                    'Link': 'Link',
+                    'Ticket ID': 'TKTS',
+                    'Link': '',
                     'Assignee': 'Assignee',
                     'Request Type': 'Request Type',
                     'Status': 'Status'
