@@ -408,16 +408,10 @@ def get_priority_ticket_count(_service, today_str): # <-- 'service' to '_service
     # --- UPDATED: Broader query (removed 'in:inbox') ---
     query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "Urgent") after:{today_str}'
     
-    # --- DEBUGGING STEP 1: Show the query ---
-    st.write(f"**Gmail Query:** `{query}`")
-    
     try:
         # Search for messages
         results = _service.users().messages().list(userId='me', q=query).execute() # <-- CHANGED
         messages = results.get('messages', [])
-        
-        # --- DEBUGGING STEP 2: Show how many emails matched the query ---
-        st.write(f"**Matching Emails Found:** `{len(messages)}`")
         
         if not messages:
             return 0 # No priority emails today
@@ -460,17 +454,14 @@ def get_priority_ticket_count(_service, today_str): # <-- 'service' to '_service
             batch.add(_service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set) # <-- CHANGED
         
         batch.execute()
-
-        # --- DEBUGGING STEP 3: Show the final tickets found ---
-        st.write(f"**Unique Tickets Found:** `{unique_ticket_ids}`")
         
         return len(unique_ticket_ids)
 
     except HttpError as error:
-        st.warning(f"An error occurred searching Gmail: {error}")
+        print(f"An error occurred searching Gmail: {error}")
         return 0
     except Exception as e:
-        st.warning(f"An error occurred parsing Gmail messages: {e}")
+        print(f"An error occurred parsing Gmail messages: {e}")
         return 0
 # --- END OF NEW/UPDATED GMAIL SECTION ---
 
@@ -680,10 +671,6 @@ except Exception as e:
 # --- Block 3: Load Priority Tickets ---
 priority_count = 0 # Default value
 gmail_service = get_gmail_service()
-
-# --- DEBUGGING: Show if the service loaded ---
-st.write(f"**Gmail Service Loaded:** `{gmail_service is not None}`")
-
 if gmail_service is None:
     # Show a visible warning on the app if the service failed to build
     st.warning("Could not connect to Gmail API. 'Priority TKTS' count will be 0. Check GMAIL_TOKEN secret.", icon="📧")
