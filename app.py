@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
-from datetime import datetime, timezone # <-- NEW IMPORT
+from datetime import datetime, timezone
 import json
 # --- 1. NEW IMPORT ---
 from streamlit_autorefresh import st_autorefresh
@@ -717,7 +717,11 @@ df_all["created_date"] = df_all["created"].dt.date
 df_all["resolved_date"] = df_all["resolutiondate"].dt.date
 
 created_today_count = len(df_all[df_all["created_date"] == today])
-closed_today_count = len(df_all[df_all["resolved_date"] == today])
+
+# --- UPDATED: Filtered count for "Closed Today" ---
+all_closed_today_df = df_all[df_all["resolved_date"] == today]
+filtered_closed_today_df = all_closed_today_df[all_closed_today_df['request_type'] != "China - Outbound"]
+closed_today_count = len(filtered_closed_today_df)
 # --- End of New Metrics ---
 
 
@@ -1035,26 +1039,29 @@ with tab_explorer:
 
     # --- Section 2: NEW Daily Closed Ticket Report (Using User's Idea) ---
     st.header(f"Today's Closed Tickets ({today.strftime('%d-%b-%Y')})")
-    st.caption("This report uses the 30-day data cache and refreshes every 5 minutes.")
+    st.caption("This report uses data from tickets created or resolved in the last 30 days.")
     
     with st.container(border=True):
         if df_all.empty:
-            st.info("No 30-day ticket data available to build a report.")
+            st.info("No ticket data available to build a report.")
         else:
             # 1. Filter df_all for today's date
             daily_closed_df = df_all[df_all["resolved_date"] == today]
             
             # 2. Exclude assignees
             exclude_assignees = ["Adops-EA Group", "Ganesh Balasaheb Zaware"]
-            filtered_df = daily_closed_df[~daily_closed_df['assignee'].isin(exclude_assignees)]
+            filtered_by_assignee_df = daily_closed_df[~daily_closed_df['assignee'].isin(exclude_assignees)]
+
+            # 3. NEW: Exclude request type
+            filtered_df = filtered_by_assignee_df[filtered_by_assignee_df['request_type'] != "China - Outbound"]
 
             if filtered_df.empty:
                 st.info(f"No tickets were closed today (after exclusions).")
             else:
-                # 3. Get the list of assignees who closed tickets
+                # 4. Get the list of assignees who closed tickets
                 assignee_list = sorted(filtered_df['assignee'].unique())
                 
-                # 4. Create the selectbox
+                # 5. Create the selectbox
                 selected_assignee_report = st.selectbox(
                     "Select an assignee to view their closed tickets:",
                     assignee_list,
@@ -1063,7 +1070,7 @@ with tab_explorer:
                 )
                 
                 if selected_assignee_report:
-                    # 5. Filter for the selected assignee
+                    # 6. Filter for the selected assignee
                     report_df = filtered_df[filtered_df['assignee'] == selected_assignee_report].copy()
                     
                     st.metric(
@@ -1071,7 +1078,7 @@ with tab_explorer:
                         value=len(report_df)
                     )
                     
-                    # 6. Display their tickets in a dataframe
+                    # 7. Display their tickets in a dataframe
                     report_df['Ticket Link'] = report_df['key'].apply(lambda key: f"{JIRA_DOMAIN}/browse/{key}")
                     display_cols = ['key', 'request_type', 'Ticket Link']
                     
