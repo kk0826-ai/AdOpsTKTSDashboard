@@ -10,10 +10,19 @@ from streamlit_autorefresh import st_autorefresh
 from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type, RetryError
 import re # --- NEW --- (For search)
 
+# --- START OF NEW SECTION (Gmail Imports) ---
+import os.path
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+# --- END OF NEW SECTION ---
+
 # --- 2. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="",
+    page_icon="🎟️",
     layout="wide",
 )
 
@@ -338,44 +347,106 @@ def get_ticket_details(ticket_key):
         "Resolved": resolved_date
     }
 
-# --- 5e. NEW: Helper Function to build HTML table ---
-def build_html_table(df, columns, link_column=None, link_text_col=None):
+# --- START OF NEW SECTION (Gmail Functions) ---
+# --- 5e. NEW: GMAIL - Authentication ---
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+
+@st.cache_resource
+def get_gmail_service():
+    """Builds and returns a Gmail API service object.
+       Uses @st.cache_resource to only do this once.
     """
-    Builds a scrollable HTML table from a DataFrame, with Manrope font
-    and an optional clickable link column.
+    creds = None
+    # Check if the token is in Streamlit's secrets
+    if 'GMAIL_TOKEN' in st.secrets:
+        # Load credentials from the Streamlit secret
+        creds_json = st.secrets['GMAIL_TOKEN']
+        creds = Credentials.from_authorized_user_info(json.loads(creds_json), SCOPES)
+
+    if not creds:
+        # Don't stop the app, just return None. We'll handle this gracefully.
+        print("Gmail token not found in Streamlit Secrets.")
+        return None
+    
+    try:
+        service = build('gmail', 'v1', credentials=creds)
+        return service
+    except HttpError as error:
+        print(f"An error occurred building the Gmail service: {error}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return None
+
+# --- 5f. NEW: GMAIL - Priority Ticket Counter ---
+@st.cache_data(ttl=300) # Refresh every 5 minutes
+def get_priority_ticket_count(service, today_str):
     """
-    
-    # Start building the HTML string
-    html = """
-    <div class="table-container">
-        <table class="custom-table">
-            <thead>
-                <tr>
+    Searches Gmail for priority tickets for the given day and returns a unique count.
     """
+    if not service:
+        return 0
+
+    # Build the search query
+    query = f'(to:adops-ea@miqdigital.com OR to:adops-emea@miqdigital.com) ("priority" OR "prioritise") in:inbox after:{today_str}'
     
-    # Column headers
-    for col_name in columns.values():
-        html += f"<th>{col_name}</th>"
-    html += "</tr></thead><tbody>"
-    
-    # Table rows
-    for index, row in df.iterrows():
-        html += "<tr>"
-        for col_key, col_name in columns.items():
-            if col_key == link_column:
-                # Create a clickable link
-                url = row[col_key]
-                text = row[link_text_col] # Get the text from the link_text col
-                html += f'<td><a href="{url}" target="_blank">{text}</a></td>'
-            else:
-                html += f"<td>{row[col_key]}</td>"
-        html += "</tr>"
+    try:
+        # Search for messages
+        results = service.users().messages().list(userId='me', q=query).execute()
+        messages = results.get('messages', [])
         
-    html += "</tbody></table></div>"
-    return html
+        if not messages:
+            return 0 # No priority emails today
+
+        unique_ticket_ids = set()
+        
+        # Regex to find TKTS-#####
+        ticket_regex = re.compile(r'TKTS-\d+', re.IGNORECASE)
+        
+        # We use a batch request to get all message snippets at once
+        batch = service.new_batch_http_request()
+        
+        def add_tickets_to_set(request_id, response, exception):
+            if exception is None:
+                # Combine subject and snippet to search
+                subject = ""
+                snippet = response.get('snippet', '')
+                headers = response.get('payload', {}).get('headers', [])
+                for h in headers:
+                    if h['name'].lower() == 'subject':
+                        subject = h['value']
+                        break
+                
+                search_text = subject + " " + snippet
+                
+                # Find all "TKTS-XXXX" patterns
+                found_tickets = ticket_regex.findall(search_text)
+                if found_tickets:
+                    for ticket in found_tickets:
+                        unique_ticket_ids.add(ticket.upper())
+            else:
+                # Don't show an error, just log it to the Streamlit console
+                print(f"Warning: Failed to get email part: {exception}")
+
+        # Limit to 50 results to be safe and fast
+        for message in messages[:50]: 
+            batch.add(service.users().messages().get(userId='me', id=message['id'], format='metadata', metadataHeaders=['subject']), callback=add_tickets_to_set)
+        
+        batch.execute()
+
+        return len(unique_ticket_ids)
+
+    except HttpError as error:
+        # Don't stop the app, just log the error and return 0
+        print(f"An error occurred searching Gmail: {error}")
+        return 0
+    except Exception as e:
+        print(f"An error occurred parsing Gmail messages: {e}")
+        return 0
+# --- END OF NEW SECTION ---
 
 
-# --- 6. CSS (UPDATED FOR MANROPE & HTML TABLE) ---
+# --- 6. CSS (UPDATED FOR MANROPE FONT & ALL ICON FIXES) ---
 st.markdown("""
 <style>
 /* --- NEW: Import Manrope from Google Fonts --- */
@@ -394,39 +465,12 @@ h1, h2, h3, h4, h5, h6 {
     font-family: 'Manrope', Arial, sans-serif !important;
 }
 
-/* --- 3. NEW: HTML TABLE STYLING --- */
-.table-container {
-    height: 400px; /* Set a fixed height */
-    overflow-y: auto; /* Add a vertical scrollbar */
-    border-radius: 0px; /* Sharp corners */
+/* --- 3. TABLE CONTENT (st.dataframe) --- */
+/* This rule sets the font family for the table */
+div[data-baseweb="data-table"] * {
+    font-family: 'Manrope', Arial, sans-serif !important;
+    font-weight: 400 !important; /* Force table text to be readable */
 }
-.custom-table {
-    width: 100%;
-    border-collapse: collapse; /* Clean lines */
-}
-.custom-table th, .custom-table td {
-    padding: 6px 10px; /* More compact padding */
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2); /* Subtle white row separator */
-    text-align: left;
-    font-weight: 400; /* Use Regular 400 for readability */
-    font-size: 0.9rem; /* Smaller font */
-}
-.custom-table th {
-    font-weight: 600; /* Use SemiBold 600 for headers */
-    background-color: #0E1117; /* Match Streamlit's dark header */
-    color: #FFFFFF; /* WHITE text for header */
-    position: sticky; /* Make headers stick */
-    top: 0;
-}
-.custom-table a {
-    color: #58C0ED; /* Bright link color */
-    text-decoration: none;
-    font-weight: 600; /* Make links stand out */
-}
-.custom-table a:hover {
-    text-decoration: underline;
-}
-/* --- END HTML TABLE STYLING --- */
 
 /* --- 4. NEW: CENTER HIGHLIGHTS SECTION --- */
 /* This targets the columns only inside our new custom div */
@@ -434,18 +478,33 @@ h1, h2, h3, h4, h5, h6 {
     text-align: center; /* Center-aligns the h3 and the ul block */
 }
 
+/* This finds the <ul> lists that were centered by the rule above */
 .highlights-container [data-testid="stVerticalBlock"] ul {
-    text-align: left;
-    display: inline-block;
+    text-align: left;      /* Aligns the text *inside* the list to the left */
+    display: inline-block; /* Makes the left-aligned list block center-able */
 }
 
-/* --- 5. NEW: FIX SELECTBOX (DROPDOWN) ICON --- */
+/* --- 5. UPDATED: FIX ALL ICONS --- */
+
+/* This rule targets elements with BOTH a Streamlit class AND the icon class */
+div[data-testid="stExpander"] [class*="material-icons"] {
+    font-family: 'Material Icons' !important;
+    font-weight: 400 !important; /* Reset weight for the icon itself */
+}
+
 /* This fixes the dropdown arrow in all select boxes */
 div[data-testid="stSelectbox"] [data-testid="stSvgIcon"] {
     font-family: 'Material Icons' !important; /* Use the correct font */
     font-weight: 400 !important; /* Reset weight for the icon */
     font-size: 24px !important; /* Ensure it's the right size */
 }
+
+/* This fixes the table icons */
+div[data-baseweb="data-table"] span[class*="material-icons"] {
+    font-family: 'Material Icons' !important;
+    font-weight: 400 !important; /* Reset weight for the icon itself */
+}
+/* --- END ICON FIXES --- */
 
 
 /* --- ADDED: Header CSS --- */
@@ -454,18 +513,22 @@ div[data-testid="stSelectbox"] [data-testid="stSvgIcon"] {
     background-image: url('https://i.ibb.co/nMTJF4B9/vj-HZbu8-Imgur.jpg');
     background-size: cover;
     background-position: center;
-    margin-bottom: 1rem;
-    border-radius: 0px !important;
+    margin-bottom: 1rem; /* Space below header */
+    border-radius: 0px !important; /* Keep it sharp */
 }
 .header-text {
     color: white;
     text-align: center;
-    font-size: 2.0rem;
-    font-weight: 500;
+    font-size: 2.0rem; /* <-- Reduced font size */
+    font-weight: 500;  /* Kept at 500 (Medium) for readability */
     font-family: 'Manrope', Arial, sans-serif;
 }
 /* --- End Header CSS --- */
 
+/* --- FIX: This is the rule that makes the table full-width --- */
+table {
+    width: 100% !important;
+}
 
 /* Remove rounded corners from all containers, tabs, and blocks */
 div[data-testid="stContainer"],
@@ -478,8 +541,8 @@ div[data-testid="stMetric"],
 section.main div.block-container,
 div[data-testid="stBorderedStContainer"],
 div[data-testid="stDataFrame"],
-div[data-baseweb="data-table"],
-div[data-testid="stAlert"] {
+div[data-baseweb="data-table"], /* <-- ✅ NEW: Targets inner dataframe */
+div[data-testid="stAlert"] {      /* <-- ✅ NEW: Targets st.info/st.error */
     border-radius: 0px !important;
 }
 
@@ -521,7 +584,7 @@ div[data-testid="stMetricLabel"], div[data-testid="stMetricValue"] {
 /* Make markdown table headers bold and centered */
 table th {
     text-align: center !important;
-    font-weight: 600 !important;
+    font-weight: 600 !important; /* Kept at 600 (SemiBold) for readability */
 }
 
 </style>
@@ -538,7 +601,7 @@ st.markdown(
 )
 
 
-# --- 8. Load Data (UPDATED FOR RESILIENCY) ---
+# --- 8. Load Data (UPDATED FOR GMAIL) ---
 # Define default empty DataFrames
 df = pd.DataFrame(columns=[
     "key", "status", "assignee", "created", "request_type", 
@@ -583,6 +646,23 @@ except RetryError as e:
     st.error(f"Failed to fetch DAILY metrics: {error_details}", icon="📉")
 except Exception as e:
     st.error(f"Error loading DAILY metrics: {e}", icon="📉")
+
+# --- START OF NEW SECTION (Gmail) ---
+# --- Block 3: Load Priority Tickets ---
+priority_count = 0 # Default value
+try:
+    gmail_service = get_gmail_service()
+    if gmail_service:
+        today_str = datetime.now().strftime('%Y/%m/%d')
+        priority_count = get_priority_ticket_count(gmail_service, today_str)
+    else:
+        # Don't show an error if the service failed to build, just warn
+        print("Gmail service could not be initialized.")
+except Exception as e:
+    # Catch-all to ensure the app never crashes from Gmail
+    print(f"Could not fetch priority ticket count: {e}")
+# --- END OF NEW SECTION ---
+
 
 # --- Stop only if BOTH fail and we have no data at all ---
 if df.empty and df_all.empty:
@@ -634,8 +714,8 @@ tab_dashboard, tab_explorer, tab_lookup = st.tabs(["SUMMARY", "EXPLORE", "TICKET
 with tab_dashboard:
     # --- UPDATED: Metrics Section with centered content ---
     with st.container(border=True):
-        # Create 7 columns: 1 blank, 5 for content, 1 blank
-        _, col1, col2, col3, col4, col5, _ = st.columns([1, 2, 2, 2, 2, 2, 1])
+        # --- UPDATED: Create 8 columns for 6 metrics ---
+        _, col1, col2, col3, col4, col5, col6, _ = st.columns([1, 2, 2, 2, 2, 2, 2, 1])
         
         # --- UPDATED MARKDOWN: Wrapped in a single centered div ---
         col1.markdown(f"""
@@ -672,6 +752,14 @@ with tab_dashboard:
             <p style='margin-top:0px; padding-top:0px;'>TKTS Closed Today</p>
         </div>
         """, unsafe_allow_html=True)
+        
+        # --- NEW: Priority Ticket Metric ---
+        col6.markdown(f"""
+        <div style='text-align:center;'>
+            <h3 style='color:#FFC300; margin-bottom:0px; padding-bottom:0px;'>{priority_count}</h3>
+            <p style='margin-top:0px; padding-top:0px;'>Priority TKTS Today</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 
     # --- Filter Buttons (Unchanged) ---
@@ -700,53 +788,42 @@ with tab_dashboard:
     else:
         display_df = breached_df
 
-    # --- REPLACED st.dataframe with custom HTML table ---
-    
-    # Create a copy for manipulation
-    table_df = display_df.copy()
+    # --- Use st.dataframe (Unchanged from last version) ---
+    table_cols = ["Ticket", "Ticket Link", "SLA Timer", "status", "assignee", "request_type", "created", "campaign_start_date"]
+    table_df = display_df[table_cols].copy()
     
     # Format dates
     table_df['created'] = table_df['created'].dt.strftime('%d%b%Y %H:%M')
     table_df['campaign_start_date'] = table_df['campaign_start_date'].dt.strftime('%d%b%Y')
-    
-    # Create the link text and link URL
-    table_df["Link_Text"] = "Open ↗" # The text to display
-    
-    # Create a new DataFrame with just the columns we want, in the order we want
-    final_table_df = pd.DataFrame()
-    final_table_df['TKTS'] = table_df['Ticket']
-    final_table_df['Link'] = table_df['Ticket Link'] # The URL
-    final_table_df['Link Text'] = "Open ↗" # The display text
-    final_table_df['SLA Status'] = table_df['SLA Timer']
-    final_table_df['Status'] = table_df['status']
-    final_table_df['Assignee'] = table_df['assignee']
-    final_table_df['Request Type'] = table_df['request_type']
-    final_table_df['Created (UTC)'] = table_df['created']
-    final_table_df['Start Date'] = table_df['campaign_start_date']
 
-    # Define the final columns for the HTML builder
-    html_cols = {
-        'TKTS': 'TKTS',
-        'Link': '', # This is the link_column
-        'SLA Status': 'SLA',
-        'Status': 'Status',
-        'Assignee': 'Assignee',
-        'Request Type': 'Request Type',
-        'Created (UTC)': 'Created (UTC)',
-        'Start Date': 'Start Date'
-    }
-
-    if final_table_df.empty:
+    if table_df.empty:
         st.info("No tickets found for this filter.")
     else:
-        html = build_html_table(
-            final_table_df, 
-            html_cols, 
-            link_column="Link", 
-            link_text_col="Link Text"
+        st.dataframe(
+            table_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Ticket": st.column_config.TextColumn(
+                    "TKTS",
+                    help="Jira Ticket Key"
+                ),
+                "Ticket Link": st.column_config.LinkColumn(
+                    "",
+                    help="Click to open Jira ticket",
+                    display_text="Open ↗"
+                ),
+                "SLA Timer": "SLA Status",
+                "status": "Status",
+                "assignee": "Assignee",
+                "request_type": "Request Type",
+                "created": "Created (UTC)",
+                "campaign_start_date": st.column_config.TextColumn(
+                    "Start Date",
+                    help="Campaign Start Date (Main or China)"
+                )
+            }
         )
-        st.markdown(html, unsafe_allow_html=True)
-
 
     # --- LAYOUT CHANGE: Today's Snapshot moved here ---
     st.divider()
@@ -761,7 +838,7 @@ with tab_dashboard:
 
         # --- Column 1: Top 5 Created Request Types (NOW INDENTED) ---
         with col_created:
-            st.subheader(f"Top 5 Requests types")
+            st.subheader(f"Top 5 Requests type")
             
             # Filter df_all for tickets created today
             created_today_df = df_all[df_all["created_date"] == today]
@@ -895,11 +972,11 @@ with tab_dashboard:
 # --- END OF TAB_DASHBOARD BLOCK ---
 
 
-# --- === MODIFIED tab_explorer (Using HTML Tables) === ---
+# --- === MODIFIED tab_explorer (Using User's New Idea) === ---
 with tab_explorer:
     
     # --- Section 1: Existing Active Ticket Explorer ---
-    st.header("Filter Open TKTS by Assignee")
+    st.header("Active Ticket Explorer")
     with st.container(border=True):
         # Check if df is empty before trying to access 'assignee'
         if not df.empty:
@@ -915,46 +992,36 @@ with tab_explorer:
             if selected_assignee:
                 assignee_df = df[df['assignee'] == selected_assignee].sort_values(by='created')
                 
-                # --- REPLACED st.dataframe with custom HTML table ---
-                table_df_assignee = assignee_df.copy()
+                table_cols_assignee = ["Ticket", "Ticket Link", "SLA Timer", "status", "request_type", "created", "campaign_start_date"]
+                table_df_assignee = assignee_df[table_cols_assignee].copy()
+                
+                # Format dates
                 table_df_assignee['created'] = table_df_assignee['created'].dt.strftime('%d%b%Y %H:%M')
                 table_df_assignee['campaign_start_date'] = table_df_assignee['campaign_start_date'].dt.strftime('%d%b%Y')
-                
-                # Create a new DataFrame with just the columns we want
-                final_table_df_active = pd.DataFrame()
-                final_table_df_active['TKTS'] = table_df_assignee['Ticket']
-                final_table_df_active['Link'] = table_df_assignee['Ticket Link'] # The URL
-                final_table_df_active['Link Text'] = "Open ↗" # The display text
-                final_table_df_active['SLA Status'] = table_df_assignee['SLA Timer']
-                final_table_df_active['Status'] = table_df_assignee['status']
-                final_table_df_active['Request Type'] = table_df_assignee['request_type']
-                final_table_df_active['Created (UTC)'] = table_df_assignee['created']
-                final_table_df_active['Start Date'] = table_df_assignee['campaign_start_date']
-                
-                html_cols_active = {
-                    'TKTS': 'TKTS',
-                    'Link': 'Link', # This is the link_column
-                    'SLA Status': 'SLA Status',
-                    'Status': 'Status',
-                    'Request Type': 'Request Type',
-                    'Created (UTC)': 'Created (UTC)',
-                    'Start Date': 'Start Date'
-                }
 
-                html = build_html_table(
-                    final_table_df_active,
-                    html_cols_active,
-                    link_column="Link",
-                    link_text_col="Link Text"
+                st.dataframe(
+                    table_df_assignee,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Ticket": st.column_config.TextColumn("TKTS", help="Jira Ticket Key"),
+                        "Ticket Link": st.column_config.LinkColumn("", help="Click to open Jira ticket", display_text="Open ↗"),
+                        "SLA Timer": "SLA Status",
+                        "status": "Status",
+                        "assignee": "Assignee",
+                        "request_type": "Request Type",
+                        "created": "Created (UTC)",
+                        "campaign_start_date": st.column_config.TextColumn("Start Date", help="Campaign Start Date (Main or China)")
+                    }
                 )
-                st.markdown(html, unsafe_allow_html=True)
         else:
             st.info("No active tickets to explore.")
             
     st.divider()
 
     # --- Section 2: NEW Daily Closed Ticket Report (Using User's Idea) ---
-    st.header(f"Closed TKTS by Assignee on ({today.strftime('%d-%b-%Y')})")
+    st.header(f"Today's Closed Tickets ({today.strftime('%d-%b-%Y')})")
+    st.caption("This report uses the 30-day data cache and refreshes every 5 minutes.")
     
     with st.container(border=True):
         if df_all.empty:
@@ -991,28 +1058,23 @@ with tab_explorer:
                     )
                     
                     # 6. Display their tickets in a dataframe
-                    report_df['Ticket Link URL'] = report_df['key'].apply(lambda key: f"{JIRA_DOMAIN}/browse/{key}")
+                    report_df['Ticket Link'] = report_df['key'].apply(lambda key: f"{JIRA_DOMAIN}/browse/{key}")
+                    display_cols = ['key', 'request_type', 'Ticket Link']
                     
-                    # --- REPLACED st.dataframe with custom HTML table ---
-                    final_table_df_closed = pd.DataFrame()
-                    final_table_df_closed['Ticket ID'] = report_df['key']
-                    final_table_df_closed['Request Type'] = report_df['request_type']
-                    final_table_df_closed['Link'] = report_df['Ticket Link URL']
-                    final_table_df_closed['Link Text'] = "Open ↗"
-                    
-                    html_cols_closed = {
-                        'Ticket ID': 'Ticket ID',
-                        'Request Type': 'Request Type',
-                        'Link': 'Link'
-                    }
-
-                    html = build_html_table(
-                        final_table_df_closed,
-                        html_cols_closed,
-                        link_column="Link",
-                        link_text_col="Link Text"
+                    st.dataframe(
+                        report_df[display_cols],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "key": "Ticket ID",
+                            "request_type": "Request Type",
+                            "Ticket Link": st.column_config.LinkColumn(
+                                "",
+                                help="Click to open Jira ticket",
+                                display_text="Open ↗"
+                            )
+                        }
                     )
-                    st.markdown(html, unsafe_allow_html=True)
 
 
 # --- NEW: Ticket Lookup Tab ---
