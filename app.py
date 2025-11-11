@@ -400,6 +400,7 @@ def get_priority_ticket_set(_service, today_str): # <-- CHANGED: Renamed functio
     query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "Urgent") after:{today_str}'
     
     try:
+        # Search for messages
         results = _service.users().messages().list(userId='me', q=query).execute()
         messages = results.get('messages', [])
         
@@ -445,6 +446,49 @@ def get_priority_ticket_set(_service, today_str): # <-- CHANGED: Renamed functio
         print(f"An error occurred parsing Gmail messages: {e}")
         return set()
 # --- END OF NEW/UPDATED GMAIL SECTION ---
+
+
+# --- 5h. NEW: Helper Function to build HTML table ---
+def build_html_table(df, columns, link_column_key=None, link_text_col_key=None):
+    """
+    Builds a scrollable HTML table from a DataFrame, with Manrope font
+    and an optional clickable link column.
+    
+    Args:
+        df (pd.DataFrame): The data to display.
+        columns (dict): A dictionary of {data_column_name: display_column_name}
+        link_column_key (str): The name of the column in `df` that contains the URL.
+        link_text_col_key (str): The name of the column in `df` that contains the text for the link.
+    """
+    
+    # Start building the HTML string
+    html = """
+    <div class="table-container">
+        <table class="custom-table">
+            <thead>
+                <tr>
+    """
+    
+    # Column headers
+    for col_name in columns.values():
+        html += f"<th>{col_name}</th>"
+    html += "</tr></thead><tbody>"
+    
+    # Table rows
+    for index, row in df.iterrows():
+        html += "<tr>"
+        for col_key, col_name in columns.items():
+            if col_key == link_column_key:
+                # Create a clickable link
+                url = row[col_key]
+                text = row[link_text_col_key] # Get the text from the link_text col
+                html += f'<td><a href="{url}" target="_blank">{text}</a></td>'
+            else:
+                html += f"<td>{row[col_key]}</td>"
+        html += "</tr>"
+        
+    html += "</tbody></table></div>"
+    return html
 
 
 # --- 6. CSS (UPDATED FOR MANROPE & HTML TABLE) ---
@@ -506,6 +550,7 @@ h1, h2, h3, h4, h5, h6 {
     text-align: center; /* Center-aligns the h3 and the ul block */
 }
 
+/* This finds the <ul> lists that were centered by the rule above */
 .highlights-container [data-testid="stVerticalBlock"] ul {
     text-align: left;
     display: inline-block;
@@ -781,7 +826,7 @@ with tab_dashboard:
         """, unsafe_allow_html=True)
 
     # --- NEW: Add caption for the asterisk ---
-    st.caption("*Priority TKTS Today is an estimate based on a search of 'priority' and 'urgent' emails and may not include all intended tickets.")
+    st.caption("*Priority TKTS Today is an estimate based on a search of 'priority', 'prioritise', and 'urgent' emails and may not include all intended tickets.")
 
 
     # --- Filter Buttons (Unchanged) ---
@@ -837,7 +882,7 @@ with tab_dashboard:
     # Define the final columns for the HTML builder
     html_cols = {
         'TKTS': 'TKTS',
-        'Link': 'Link', # This is the link_column
+        'Link': 'Link', # This is the link_column_key
         'SLA Status': 'SLA Status',
         'Status': 'Status',
         'Assignee': 'Assignee',
@@ -1043,7 +1088,7 @@ with tab_explorer:
                 
                 html_cols_active = {
                     'TKTS': 'TKTS',
-                    'Link': 'Link', # This is the link_column
+                    'Link': 'Link', # This is the link_column_key
                     'SLA Status': 'SLA Status',
                     'Status': 'Status',
                     'Request Type': 'Request Type',
@@ -1128,7 +1173,7 @@ with tab_explorer:
                     )
                     st.markdown(html, unsafe_allow_html=True)
     
-    st.divider() # <-- NEW DIVIDER
+    st.divider() 
     
     # --- Section 3: NEW Priority Ticket Details ---
     st.header(f"Priority Ticket Details ({today.strftime('%d-%b-%Y')})")
