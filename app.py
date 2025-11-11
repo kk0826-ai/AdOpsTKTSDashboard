@@ -881,7 +881,7 @@ with tab_dashboard:
 
     # Define the final columns for the HTML builder
     html_cols = {
-        'TKTS': 'TKTS',
+        'TKTS': 'TKTS-No',
         'Link': '', # This is the link_column_key
         'SLA Status': 'SLA',
         'Status': 'Status',
@@ -1087,7 +1087,7 @@ with tab_explorer:
                 final_table_df_active['Start Date'] = table_df_assignee['campaign_start_date']
                 
                 html_cols_active = {
-                    'TKTS': 'TKTS',
+                    'TKTS': 'TKTS-No',
                     'Link': '', # This is the link_column_key
                     'SLA Status': 'SLA',
                     'Status': 'Status',
@@ -1159,7 +1159,7 @@ with tab_explorer:
                     final_table_df_closed['Link Text'] = "Open ↗"
                     
                     html_cols_closed = {
-                        'Ticket ID': 'TKTS',
+                        'Ticket ID': 'TKTS-No',
                         'Request Type': 'Request Type',
                         'Link': ''
                     }
@@ -1208,7 +1208,7 @@ with tab_explorer:
                 final_table_df_priority['Status'] = priority_details_df['status']
                 
                 html_cols_priority = {
-                    'Ticket ID': 'TKTS',
+                    'Ticket ID': 'TKTS-No',
                     'Link': '',
                     'Assignee': 'Assignee',
                     'Request Type': 'Request Type',
