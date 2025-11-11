@@ -9,6 +9,8 @@ import json
 from streamlit_autorefresh import st_autorefresh
 from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type, RetryError
 import re # --- NEW --- (For search)
+
+# --- START OF NEW SECTION (Gmail Imports) ---
 import os.path
 import base64 # <-- NEW: For reading email body
 from google.auth.transport.requests import Request
@@ -390,28 +392,32 @@ def get_email_body(payload):
     elif payload.get('mimeType') == 'text/plain':
         data = payload.get('body', {}).get('data')
         if data:
-            body += base64.urlsafe_b64decode(data).decode('utf-8')
+            # Decode from base64 and ignore errors
+            body += base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
     return body
 
 # --- 5g. GMAIL - Priority Ticket Counter (UPDATED) ---
 @st.cache_data(ttl=300) # Refresh every 5 minutes
-def get_priority_ticket_count(_service, today_str): # <-- CHANGED: 'service' to '_service'
+def get_priority_ticket_count(_service, today_str): # <-- 'service' to '_service'
     """
     Searches Gmail for priority tickets for the given day and returns a unique count.
     """
-    if not _service: # <-- CHANGED: 'service' to '_service'
+    if not _service: # <-- 'service' to '_service'
         return 0
 
     # --- UPDATED: Broader query (removed 'in:inbox') ---
-    query = f'(to:adops-ea@miqdigital.com OR to:adops-emea@miqdigital.com) ("priority" OR "prioritise" OR "Urgent") after:{today_str}'
-    print(f"GMAIL QUERY: {query}") # For debugging in logs
+    query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "Urgent") after:{today_str}'
+    
+    # --- DEBUGGING STEP 1: Show the query ---
+    st.write(f"**Gmail Query:** `{query}`")
     
     try:
         # Search for messages
         results = _service.users().messages().list(userId='me', q=query).execute() # <-- CHANGED
         messages = results.get('messages', [])
         
-        print(f"Found {len(messages)} matching emails.") # For debugging in logs
+        # --- DEBUGGING STEP 2: Show how many emails matched the query ---
+        st.write(f"**Matching Emails Found:** `{len(messages)}`")
         
         if not messages:
             return 0 # No priority emails today
@@ -421,7 +427,6 @@ def get_priority_ticket_count(_service, today_str): # <-- CHANGED: 'service' to 
         # Regex to find TKTS-#####
         ticket_regex = re.compile(r'TKTS-\d+', re.IGNORECASE)
         
-        # We use a batch request to get all message snippets at once
         batch = _service.new_batch_http_request() # <-- CHANGED
         
         def add_tickets_to_set(request_id, response, exception):
@@ -448,25 +453,24 @@ def get_priority_ticket_count(_service, today_str): # <-- CHANGED: 'service' to 
                     for ticket in found_tickets:
                         unique_ticket_ids.add(ticket.upper())
             else:
-                # Don't show an error, just log it to the Streamlit console
                 print(f"Warning: Failed to get email part: {exception}")
 
-        # Limit to 50 results to be safe and fast
-        for message in messages[:50]: 
+        for message in messages[:50]: # Limit to 50 results
             # Request 'full' format to get the body
             batch.add(_service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set) # <-- CHANGED
         
         batch.execute()
 
-        print(f"Found {len(unique_ticket_ids)} unique tickets.") # For debugging
+        # --- DEBUGGING STEP 3: Show the final tickets found ---
+        st.write(f"**Unique Tickets Found:** `{unique_ticket_ids}`")
+        
         return len(unique_ticket_ids)
 
     except HttpError as error:
-        # Don't stop the app, just log the error and return 0
-        print(f"An error occurred searching Gmail: {error}")
+        st.warning(f"An error occurred searching Gmail: {error}")
         return 0
     except Exception as e:
-        print(f"An error occurred parsing Gmail messages: {e}")
+        st.warning(f"An error occurred parsing Gmail messages: {e}")
         return 0
 # --- END OF NEW/UPDATED GMAIL SECTION ---
 
@@ -676,6 +680,10 @@ except Exception as e:
 # --- Block 3: Load Priority Tickets ---
 priority_count = 0 # Default value
 gmail_service = get_gmail_service()
+
+# --- DEBUGGING: Show if the service loaded ---
+st.write(f"**Gmail Service Loaded:** `{gmail_service is not None}`")
+
 if gmail_service is None:
     # Show a visible warning on the app if the service failed to build
     st.warning("Could not connect to Gmail API. 'Priority TKTS' count will be 0. Check GMAIL_TOKEN secret.", icon="📧")
