@@ -779,7 +779,7 @@ closed_today_count = len(filtered_closed_today_df)
 
 
 # --- 10. Tabs Layout (UPDATED with new tab) ---
-tab_dashboard, tab_explorer, tab_lookup = st.tabs(["SUMMARY", "EXPLORE", "TICKET LOOKUP"])
+tab_dashboard, tab_explorer, tab_lookup = st.tabs(["SUMMARY", "EXPLORE", "TKTS LOOKUP"])
 
 # --- THIS IS THE CORRECTED, FULL TAB_DASHBOARD BLOCK ---
 with tab_dashboard:
@@ -1234,7 +1234,7 @@ with tab_explorer:
 # --- NEW: Ticket Lookup Tab ---
 with tab_lookup:
     search_query = st.text_input(
-        "Enter Ticket ID (e.g., 'TKTS-1234' or just '1234')", 
+        "Enter TKTS-ID (e.g., 'TKTS-1234' or just '1234')", 
         key="ticket_search_input"
     )
     
