@@ -833,7 +833,7 @@ with tab_dashboard:
         """, unsafe_allow_html=True)
 
     # --- NEW: Add caption for the asterisk ---
-    st.caption("*Priority TKTS Today is an estimate based on a search of 'priority', 'prioritise', and 'urgent' emails and may not include all intended tickets.")
+    st.caption("*Priority TKTS Today — count may vary.")
 
 
     # --- Filter Buttons (Unchanged) ---
