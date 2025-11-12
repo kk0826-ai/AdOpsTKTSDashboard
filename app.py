@@ -221,9 +221,16 @@ def load_all_jira_data():
             "request_type": request_type
         })
     
+    # --- THIS IS THE FIX ---
     if not issues:
-        # --- UPDATED: Added new columns to empty dataframe ---
-        return pd.DataFrame(columns=["key", "created", "resolutiondate", "status", "assignee", "request_type"])
+        # Create an empty DataFrame with the correct dtypes (data types)
+        empty_df = pd.DataFrame(columns=[
+            "key", "created", "resolutiondate", "status", "assignee", "request_type"
+        ])
+        empty_df["created"] = pd.to_datetime(empty_df["created"], utc=True)
+        empty_df["resolutiondate"] = pd.to_datetime(empty_df["resolutiondate"], utc=True)
+        return empty_df
+    # --- END OF FIX ---
 
     df = pd.DataFrame(issues)
     df["created"] = pd.to_datetime(df["created"], utc=True)
