@@ -23,7 +23,7 @@ from googleapiclient.errors import HttpError
 # --- 2. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="",
+    page_icon="🎟️",
     layout="wide",
 )
 
@@ -221,16 +221,9 @@ def load_all_jira_data():
             "request_type": request_type
         })
     
-    # --- THIS IS THE FIX ---
     if not issues:
-        # Create an empty DataFrame with the correct dtypes (data types)
-        empty_df = pd.DataFrame(columns=[
-            "key", "created", "resolutiondate", "status", "assignee", "request_type"
-        ])
-        empty_df["created"] = pd.to_datetime(empty_df["created"], utc=True)
-        empty_df["resolutiondate"] = pd.to_datetime(empty_df["resolutiondate"], utc=True)
-        return empty_df
-    # --- END OF FIX ---
+        # --- UPDATED: Added new columns to empty dataframe ---
+        return pd.DataFrame(columns=["key", "created", "resolutiondate", "status", "assignee", "request_type"])
 
     df = pd.DataFrame(issues)
     df["created"] = pd.to_datetime(df["created"], utc=True)
@@ -485,13 +478,18 @@ def build_html_table(df, columns, link_column_key=None, link_text_col_key=None):
     for index, row in df.iterrows():
         html += "<tr>"
         for col_key, col_name in columns.items():
+            # Check if the value is NaN, replace with "N/A"
+            cell_value = row[col_key]
+            if pd.isna(cell_value):
+                cell_value = "N/A"
+
             if col_key == link_column_key:
                 # Create a clickable link
                 url = row[col_key]
                 text = row[link_text_col_key] # Get the text from the link_text col
                 html += f'<td><a href="{url}" target="_blank">{text}</a></td>'
             else:
-                html += f"<td>{row[col_key]}</td>"
+                html += f"<td>{cell_value}</td>"
         html += "</tr>"
         
     html += "</tbody></table></div>"
@@ -526,6 +524,7 @@ h1, h2, h3, h4, h5, h6 {
 .custom-table {
     width: 100%;
     border-collapse: collapse; /* Clean lines */
+    font-family: 'Manrope', Arial, sans-serif !important; /* Force Manrope font */
 }
 .custom-table th, .custom-table td {
     padding: 6px 10px; /* More compact padding */
@@ -763,16 +762,12 @@ within_sla_count = len(within_sla_df)
 # --- NEW: Daily Metrics ---
 today = pd.Timestamp.now(tz='UTC').date()
 
-df_all["created_date"] = df_all["created"].dt.date
-df_all["resolved_date"] = df_all["resolutiondate"].dt.date
-
-# --- UPDATED: Filtered count for "Created Today" ---
-all_created_today_df = df_all[df_all["created_date"] == today]
+# --- UPDATED: Logic now correctly uses the new df_all ---
+all_created_today_df = df_all[pd.notna(df_all["created"])]
 filtered_created_today_df = all_created_today_df[all_created_today_df['request_type'] != "China - Outbound"]
 created_today_count = len(filtered_created_today_df)
 
-# --- UPDATED: Filtered count for "Closed Today" ---
-all_closed_today_df = df_all[df_all["resolved_date"] == today]
+all_closed_today_df = df_all[pd.notna(df_all["resolutiondate"])]
 filtered_closed_today_df = all_closed_today_df[all_closed_today_df['request_type'] != "China - Outbound"]
 closed_today_count = len(filtered_closed_today_df)
 # --- End of New Metrics ---
@@ -824,17 +819,20 @@ with tab_dashboard:
         </div>
         """, unsafe_allow_html=True)
         
-        # --- NEW: Priority Ticket Metric ---
+        # --- NEW: Priority Ticket Metric with Hover-over Tooltip ---
+        tooltip_text = "Estimate based on a search of 'priority', 'prioritise', and 'urgent' emails. May not include all intended tickets."
         col6.markdown(f"""
         <div style='text-align:center;'>
-            <h3 style='color:#FFC300; margin-bottom:0px; padding-bottom:0px;'>{priority_count}*</h3>
+            <h3 style='color:#FFC300; margin-bottom:0px; padding-bottom:0px;'>
+                <span title="{tooltip_text}" style="text-decoration: underline dotted; cursor: help;">
+                    {priority_count}*
+                </span>
+            </h3>
             <p style='margin-top:0px; padding-top:0px;'>Priority TKTS Today</p>
         </div>
         """, unsafe_allow_html=True)
 
-    # --- NEW: Add caption for the asterisk ---
-    st.caption("*Priority TKTS Today is an estimate based on a search of 'priority', 'prioritise', and 'urgent' emails and may not include all intended tickets.")
-
+    # --- REMOVED: Old st.caption ---
 
     # --- Filter Buttons (Unchanged) ---
     st.markdown("### Real-Time TKTS Summary")
@@ -888,9 +886,9 @@ with tab_dashboard:
 
     # Define the final columns for the HTML builder
     html_cols = {
-        'TKTS': 'TKTS-No',
-        'Link': '', # This is the link_column_key
-        'SLA Status': 'SLA',
+        'TKTS': 'TKTS',
+        'Link': 'Link', # This is the link_column_key
+        'SLA Status': 'SLA Status',
         'Status': 'Status',
         'Assignee': 'Assignee',
         'Request Type': 'Request Type',
@@ -923,10 +921,10 @@ with tab_dashboard:
 
         # --- Column 1: Top 5 Created Request Types (NOW INDENTED) ---
         with col_created:
-            st.subheader(f"Top 5 Requests types")
+            st.subheader(f"Top 5 Requests type")
             
             # Filter df_all for tickets created today
-            created_today_df = df_all[df_all["created_date"] == today]
+            created_today_df = df_all[pd.notna(df_all["created"])] # Filter for rows that have a created date
             
             if created_today_df.empty:
                 st.info("No tickets created so far today.")
@@ -1061,7 +1059,7 @@ with tab_dashboard:
 with tab_explorer:
     
     # --- Section 1: Existing Active Ticket Explorer ---
-    st.header("Filter Open TKTS by Assignee")
+    st.header("Active Ticket Explorer")
     with st.container(border=True):
         # Check if df is empty before trying to access 'assignee'
         if not df.empty:
@@ -1094,9 +1092,9 @@ with tab_explorer:
                 final_table_df_active['Start Date'] = table_df_assignee['campaign_start_date']
                 
                 html_cols_active = {
-                    'TKTS': 'TKTS-No',
-                    'Link': '', # This is the link_column_key
-                    'SLA Status': 'SLA',
+                    'TKTS': 'TKTS',
+                    'Link': 'Link', # This is the link_column_key
+                    'SLA Status': 'SLA Status',
                     'Status': 'Status',
                     'Request Type': 'Request Type',
                     'Created (UTC)': 'Created (UTC)',
@@ -1116,14 +1114,15 @@ with tab_explorer:
     st.divider()
 
     # --- Section 2: NEW Daily Closed Ticket Report (Using User's Idea) ---
-    st.header(f"Closed TKTS by Assignee on ({today.strftime('%d-%b-%Y')})")
-
+    st.header(f"Today's Closed Tickets ({today.strftime('%d-%b-%Y')})")
+    st.caption("This report uses data from tickets created or resolved today.")
+    
     with st.container(border=True):
         if df_all.empty:
             st.info("No ticket data available to build a report.")
         else:
             # 1. Filter df_all for today's date
-            daily_closed_df = df_all[df_all["resolved_date"] == today]
+            daily_closed_df = df_all[pd.notna(df_all["resolutiondate"])]
             
             # 2. Exclude assignees
             exclude_assignees = ["Adops-EA Group", "Ganesh Balasaheb Zaware"]
@@ -1166,9 +1165,9 @@ with tab_explorer:
                     final_table_df_closed['Link Text'] = "Open ↗"
                     
                     html_cols_closed = {
-                        'Ticket ID': 'TKTS-No',
+                        'Ticket ID': 'Ticket ID',
                         'Request Type': 'Request Type',
-                        'Link': ''
+                        'Link': 'Link'
                     }
 
                     html = build_html_table(
@@ -1182,13 +1181,15 @@ with tab_explorer:
     st.divider() 
     
     # --- Section 3: NEW Priority Ticket Details ---
-    st.header(f"Priority TKTS Details ({today.strftime('%d-%b-%Y')})")
+    st.header(f"Priority Ticket Details ({today.strftime('%d-%b-%Y')})")
+    st.caption("*Based on 'priority'/'urgent' emails received today. This list may not be complete.")
     
     with st.container(border=True):
         if not priority_ticket_set:
             st.info("No priority tickets found in emails today.")
         else:
             # Create a master list of all tickets we know about
+            # We combine the active list (df) and the daily list (df_all)
             all_known_tickets_df = pd.concat([
                 df[['key', 'assignee', 'request_type', 'status', 'Ticket Link']], 
                 df_all[['key', 'assignee', 'request_type', 'status']]
@@ -1215,8 +1216,8 @@ with tab_explorer:
                 final_table_df_priority['Status'] = priority_details_df['status']
                 
                 html_cols_priority = {
-                    'Ticket ID': 'TKTS-No',
-                    'Link': '',
+                    'Ticket ID': 'Ticket ID',
+                    'Link': 'Link',
                     'Assignee': 'Assignee',
                     'Request Type': 'Request Type',
                     'Status': 'Status'
