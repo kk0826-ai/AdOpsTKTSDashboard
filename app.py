@@ -404,7 +404,7 @@ def get_priority_ticket_set(_service, today_str): # <-- CHANGED: Renamed functio
     if not _service: 
         return set() # Return an empty set
 
-    query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "Urgent") after:{today_str}'
+    query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") after:{today_str}'
     
     try:
         # Search for messages
