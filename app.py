@@ -509,7 +509,7 @@ with tab_dashboard:
             <p style='margin:0;'>Priority TKTS Today</p>
         </div>""", unsafe_allow_html=True)
         
-    st.caption("*Priority TKTS Today — count may vary. '⚠️' indicates connection error.")
+    st.caption("*Priority TKTS Today — count may vary.")
 
     # Filters
     st.markdown("### Real-Time TKTS Summary")
@@ -671,3 +671,4 @@ if st.toggle("Auto-refresh (every 5 minutes)", value=True):
 
 if 'last_fetch_time' in st.session_state:
     st.caption(f"Data last refreshed: {st.session_state['last_fetch_time'].strftime('%Y-%m-%d %H:%M:%S')}")
+
