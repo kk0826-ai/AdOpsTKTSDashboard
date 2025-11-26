@@ -4,7 +4,7 @@ import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
 from datetime import datetime, timezone, timedelta
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo  # --- NEW: For Timezone Locking ---
 import json
 import re
 import os.path
@@ -30,6 +30,8 @@ st.set_page_config(
 )
 
 # --- CONFIGURATION: SET THE PROJECT TIMEZONE ---
+# We force the dashboard to calculate "Today" based on India Time.
+# This ensures UK users see the tickets raised by India earlier in the day.
 PROJECT_TIMEZONE = ZoneInfo("Asia/Kolkata") 
 
 # --- 2. Altair Global Theme ---
@@ -197,13 +199,13 @@ def load_all_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- TIMEZONE FIX ---
+    # --- FIX: HARDCODE THE DATE STRING (No more vague startOfDay()) ---
     now_ist = datetime.now(PROJECT_TIMEZONE)
     midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Jira expects YYYY-MM-DD HH:mm for explicit comparison
     jql_date_str = midnight_ist.strftime("%Y-%m-%d %H:%M")
     
-    # --- SUB-TASK FIX: Exclude Sub-tasks so counts match standard dashboard ---
-    jql_query = f'project = TKTS AND issuetype NOT IN ("Sub-task") AND (created >= "{jql_date_str}" OR resolutiondate >= "{jql_date_str}") ORDER BY created DESC'
+    jql_query = f'project = TKTS AND (created >= "{jql_date_str}" OR resolutiondate >= "{jql_date_str}") ORDER BY created DESC'
     
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
@@ -246,13 +248,12 @@ def load_newly_assigned_tickets():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- TIMEZONE FIX ---
+    # --- FIX: HARDCODE THE DATE STRING ---
     now_ist = datetime.now(PROJECT_TIMEZONE)
     midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
     jql_date_str = midnight_ist.strftime("%Y-%m-%d %H:%M")
     
-    # --- SUB-TASK FIX ---
-    jql_query = f'project = TKTS AND issuetype NOT IN ("Sub-task") AND assignee CHANGED after "{jql_date_str}" ORDER BY updated DESC'
+    jql_query = f'project = TKTS AND assignee CHANGED after "{jql_date_str}" ORDER BY updated DESC'
     
     fields_to_request = ["assignee", "key"] 
 
@@ -663,6 +664,7 @@ with tab_explorer:
     # Closed Today
     st.header(f"Closed TKTS by Assignee on ({today_date_proj.strftime('%d-%b-%Y')})")
     with st.container(border=True):
+        # Filter strictly by PROJ DATE
         closed_today = df_all[(df_all["resolved_date"] == today_date_proj) & (~df_all['assignee'].isin(["Adops-EA Group", "Ganesh Balasaheb Zaware"])) & (df_all['request_type'] != "China - Outbound")]
         if closed_today.empty:
             st.info("No tickets closed today.")
