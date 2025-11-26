@@ -4,12 +4,10 @@ import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
 from datetime import datetime, timezone, timedelta
-from zoneinfo import ZoneInfo
 import json
 import re
 import os.path
 import base64
-import time
 
 # --- External Libraries ---
 from streamlit_autorefresh import st_autorefresh
@@ -28,9 +26,6 @@ st.set_page_config(
     page_icon="🎫",
     layout="wide",
 )
-
-# --- CONFIGURATION: SET THE PROJECT TIMEZONE ---
-PROJECT_TIMEZONE = ZoneInfo("Asia/Kolkata") 
 
 # --- 2. Altair Global Theme ---
 def set_altair_theme():
@@ -193,17 +188,13 @@ def load_jira_data():
 @st.cache_data(ttl=300)
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_all_jira_data():
-    """Loads tickets CREATED or RESOLVED today (based on IST)."""
+    """Loads tickets CREATED or RESOLVED today."""
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- TIMEZONE FIX ---
-    now_ist = datetime.now(PROJECT_TIMEZONE)
-    midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
-    jql_date_str = midnight_ist.strftime("%Y-%m-%d %H:%M")
-    
-    # --- SUB-TASK FIX: Exclude Sub-tasks so counts match standard dashboard ---
-    jql_query = f'project = TKTS AND issuetype NOT IN ("Sub-task") AND (created >= "{jql_date_str}" OR resolutiondate >= "{jql_date_str}") ORDER BY created DESC'
+    # --- RESTORED: Uses native JIRA startOfDay() for safety ---
+    # --- KEPT FIX: Excludes Sub-tasks so counts are accurate ---
+    jql_query = 'project = TKTS AND issuetype NOT IN ("Sub-task") AND (created >= startOfDay() OR resolutiondate >= startOfDay()) ORDER BY created DESC'
     
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
@@ -242,17 +233,13 @@ def load_all_jira_data():
 @st.cache_data(ttl=300)
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_newly_assigned_tickets():
-    """Fetches tickets where assignee CHANGED today (based on IST)."""
+    """Fetches tickets where assignee CHANGED today."""
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- TIMEZONE FIX ---
-    now_ist = datetime.now(PROJECT_TIMEZONE)
-    midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
-    jql_date_str = midnight_ist.strftime("%Y-%m-%d %H:%M")
-    
-    # --- SUB-TASK FIX ---
-    jql_query = f'project = TKTS AND issuetype NOT IN ("Sub-task") AND assignee CHANGED after "{jql_date_str}" ORDER BY updated DESC'
+    # --- RESTORED: Uses native JIRA startOfDay() ---
+    # --- KEPT FIX: Excludes Sub-tasks ---
+    jql_query = 'project = TKTS AND issuetype NOT IN ("Sub-task") AND assignee CHANGED during (startOfDay(), now()) ORDER BY updated DESC'
     
     fields_to_request = ["assignee", "key"] 
 
@@ -301,7 +288,7 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions (FIXED DATE FILTER TO PROJECT TIMEZONE) ---
+# --- 6. Gmail Functions (FIXED DATE FILTER TO LOCAL MIDNIGHT) ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
@@ -361,12 +348,12 @@ def get_email_body(payload):
 )
 def get_priority_ticket_set(_service, start_timestamp):
     """
-    Searches Gmail for priority tickets since Project Midnight.
+    Searches Gmail for priority tickets since Local Midnight.
     """
     if not _service: 
         return set()
 
-    # Query uses the EXACT timestamp for India Midnight
+    # Query uses the EXACT timestamp for Local Midnight
     query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") after:{start_timestamp}'
     
     print(f"DEBUG: Gmail Query = {query}") 
@@ -489,12 +476,10 @@ if gmail_service is None:
     priority_is_error = True
 else:
     try:
-        # --- FIX: CALCULATE MIDNIGHT in PROJECT TIMEZONE ---
-        now_in_project_tz = datetime.now(PROJECT_TIMEZONE)
-        midnight_in_project_tz = now_in_project_tz.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        # Convert that midnight to Epoch for Gmail
-        midnight_timestamp = int(midnight_in_project_tz.timestamp())
+        # --- FIX: CALCULATE MIDNIGHT in LOCAL TIME (Computer's Time) ---
+        local_now = datetime.now()
+        local_midnight = datetime(local_now.year, local_now.month, local_now.day)
+        midnight_timestamp = int(local_midnight.timestamp())
         
         priority_ticket_set = get_priority_ticket_set(gmail_service, midnight_timestamp)
         priority_display_value = str(len(priority_ticket_set))
@@ -528,16 +513,12 @@ total_tickets = len(df)
 breached_count = len(df[df['SLA_Status'] == '🚨 Breached'])
 within_sla_count = len(df[df['SLA_Status'] == '✅ Within SLA'])
 
-# Fix "Today" calculation for display logic
-now_in_proj = datetime.now(PROJECT_TIMEZONE)
-today_date_proj = now_in_proj.date()
+today = pd.Timestamp.now(tz='UTC').date()
+df_all["created_date"] = df_all["created"].dt.date
+df_all["resolved_date"] = df_all["resolutiondate"].dt.date
 
-# IMPORTANT: Ensure 'created' is localized to PROJECT_TIMEZONE before extracting date
-df_all["created_date"] = df_all["created"].dt.tz_convert(PROJECT_TIMEZONE).dt.date
-df_all["resolved_date"] = df_all["resolutiondate"].dt.tz_convert(PROJECT_TIMEZONE).dt.date
-
-created_today_count = len(df_all[(df_all["created_date"] == today_date_proj) & (df_all['request_type'] != "China - Outbound")])
-closed_today_count = len(df_all[(df_all["resolved_date"] == today_date_proj) & (df_all['request_type'] != "China - Outbound")])
+created_today_count = len(df_all[(df_all["created_date"] == today) & (df_all['request_type'] != "China - Outbound")])
+closed_today_count = len(df_all[(df_all["resolved_date"] == today) & (df_all['request_type'] != "China - Outbound")])
 
 
 # --- 11. Tabs Layout ---
@@ -594,14 +575,14 @@ with tab_dashboard:
 
     # Highlights
     st.divider()
-    st.header(f"Today’s Highlights ({today_date_proj.strftime('%d-%b-%Y')})")
+    st.header(f"Today’s Highlights ({today.strftime('%d-%b-%Y')})")
     st.markdown('<div class="highlights-container">', unsafe_allow_html=True)
     with st.container(border=True):
         col_created, col_resolved = st.columns(2)
         
         with col_created:
             st.subheader("Top 5 Requests types")
-            created_today_df = df_all[df_all["created_date"] == today_date_proj]
+            created_today_df = df_all[df_all["created_date"] == today]
             counts = created_today_df['request_type'].value_counts().drop(["China - Outbound"], errors='ignore').head(5)
             if counts.empty: st.info("No tickets created today.")
             else: st.markdown("\n".join([f"- **{k}:** {v} ticket(s)" for k, v in counts.items()]))
@@ -644,27 +625,6 @@ with tab_dashboard:
 
 # === TAB 2: EXPLORE ===
 with tab_explorer:
-    # --- ADDED AUDIT SECTION ---
-    st.subheader(f"📋 Audit: Tickets Created Today ({created_today_count})")
-    with st.expander("Show list of tickets created today", expanded=True):
-        # Re-use the dataframe calculated for the metric
-        audit_created = df_all[(df_all["created_date"] == today_date_proj) & (df_all['request_type'] != "China - Outbound")].copy()
-        
-        if not audit_created.empty:
-            # Add a link column
-            audit_created['Link'] = audit_created['key'].apply(lambda k: f"{JIRA_DOMAIN}/browse/{k}")
-            audit_created['Link_Text'] = "View"
-            
-            # Format columns (Time in Project TZ)
-            audit_created['Created Time'] = audit_created['created'].dt.tz_convert(PROJECT_TIMEZONE).dt.strftime('%H:%M')
-            
-            cols = {'key': 'Ticket', 'Link':'', 'request_type': 'Type', 'assignee': 'Assignee', 'Created Time': 'Time (IST)'}
-            st.markdown(build_html_table(audit_created, cols, "Link", "Link_Text"), unsafe_allow_html=True)
-        else:
-            st.info("No tickets created today.")
-
-    st.divider()
-
     # Active Filter
     st.header("Filter Open TKTS by Assignee")
     with st.container(border=True):
@@ -683,9 +643,9 @@ with tab_explorer:
     st.divider()
     
     # Closed Today
-    st.header(f"Closed TKTS by Assignee on ({today_date_proj.strftime('%d-%b-%Y')})")
+    st.header(f"Closed TKTS by Assignee on ({today.strftime('%d-%b-%Y')})")
     with st.container(border=True):
-        closed_today = df_all[(df_all["resolved_date"] == today_date_proj) & (~df_all['assignee'].isin(["Adops-EA Group", "Ganesh Balasaheb Zaware"])) & (df_all['request_type'] != "China - Outbound")]
+        closed_today = df_all[(df_all["resolved_date"] == today) & (~df_all['assignee'].isin(["Adops-EA Group", "Ganesh Balasaheb Zaware"])) & (df_all['request_type'] != "China - Outbound")]
         if closed_today.empty:
             st.info("No tickets closed today.")
         else:
@@ -701,7 +661,7 @@ with tab_explorer:
     st.divider()
     
     # Priority Details
-    st.header(f"Priority TKTS Details ({today_date_proj.strftime('%d-%b-%Y')})")
+    st.header(f"Priority TKTS Details ({today.strftime('%d-%b-%Y')})")
     with st.container(border=True):
         if not priority_ticket_set:
             st.info("No priority tickets found.")
