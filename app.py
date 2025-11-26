@@ -23,7 +23,7 @@ from googleapiclient.errors import HttpError
 # --- 1. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="🎫",
+    page_icon="",
     layout="wide",
 )
 
@@ -123,7 +123,7 @@ def load_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    # --- FIX 1: ADDED 'ORDER BY created DESC' TO ENSURE NEWEST TICKETS ARE FETCHED ---
+    # --- JQL with ORDER BY created DESC ---
     jql_query = """
         project = TKTS AND 
         issuetype in ("ANZ - Advanced Pixels", "ANZ - Audio Creatives", "ANZ - Bespoke Requests", "ANZ - Brand Lift Study Creatives", "ANZ - CTV and BVOD Creatives", "ANZ - Celtra Creatives", "ANZ - DCO Creatives", "ANZ - DOOH Creatives", "ANZ - Display Creatives", "ANZ - HTML5 Hosted Creatives", "ANZ - Native Creatives", "ANZ - Rejected Creatives", "ANZ - Social Boost Creatives", "ANZ - Standard Pixels", "ANZ - Troubleshooting - Creatives", "ANZ - Troubleshooting - Pixels", "ANZ - Video Creatives", "DE - Audio Creatives", "DE - Bespoke Requests", "DE - CTV Creatives", "DE - Celtra Creatives", "DE - Display Creatives", "DE - Native Creatives", "DE - Troubleshooting Creatives", "DE - Video Creatives", "IN - Audio Creatives", "IN - Bespoke Requests", "IN - Brand Lift Study Creatives", "IN - CTV/OTT Creatives", "IN - DCO Creatives", "IN - Display Creatives", "IN - Native Creatives", "IN - Troubleshooting Requests", "IN - Video Creatives", "Lenovo - Bespoke Request", "Lenovo - Display Creatives", "Lenovo - Trackers", "Lenovo - Troubleshooting", "Lenovo - Video Creatives", "MENA - Bespoke Requests", "MENA - Display Creatives", "MENA - Native Creatives", "MENA - Troubleshooting Creatives", "MENA - Video Creatives", "SEA - Audio Creatives", "SEA - Bespoke Requests", "SEA - Celtra Creatives", "SEA - DOOH Creatives", "SEA - Display Creatives", "SEA - Native Creatives", "SEA - Troubleshooting Creatives", "SEA - Video Creatives", "SEA - OMG/Assembly Creatives", "UK - Ad-Lib Creatives", "UK - Audio Creatives", "UK - Bespoke Requests", "UK - CTV Creatives", "UK - Celtra Creatives", "UK - Customer Match Creatives", "UK - Display Creatives", "UK - Native Creatives", "UK - Skin Creatives", "UK - Stories Creatives", "UK - THG - Creatives and Trackers", "UK - Troubleshooting Creatives", "UK - Video Creatives", "China - Bespoke Request", "China - Inbound", "MENA - Celtra Creatives", "IN - Customer Match Creatives", "ANZ - SeenThis Creatives - Self-serve only", "SEA - SeenThis Creatives - Self-serve only", "IN - SeenThis Creatives - Self-serve only", "UK - SeenThis Creatives - Self-serve only", "MENA - SeenThis Creatives - Self-serve only", "SEA - DCO Creatives", "MENA - CTV Creatives", "SEA - OTT Creatives") AND 
@@ -192,7 +192,7 @@ def load_all_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- FIX 2: ADDED 'ORDER BY created DESC' ---
+    # --- JQL with ORDER BY created DESC ---
     jql_query = "project = TKTS AND (created >= startOfDay() OR resolutiondate >= startOfDay()) ORDER BY created DESC"
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
@@ -235,7 +235,7 @@ def load_newly_assigned_tickets():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- FIX 3: ADDED 'ORDER BY updated DESC' ---
+    # --- JQL with ORDER BY updated DESC ---
     jql_query = "project = TKTS AND assignee CHANGED during (startOfDay(), now()) ORDER BY updated DESC"
     fields_to_request = ["assignee", "key"] 
 
@@ -284,7 +284,7 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions (VERBOSE ERROR HANDLING ADDED) ---
+# --- 6. Gmail Functions (VERBOSE ERROR HANDLING) ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
@@ -441,11 +441,6 @@ button { border-radius: 0px !important; }
 # --- 8. Header ---
 st.markdown("""<div class="header-container"><div class="header-text">TKTS Dashboard</div></div>""", unsafe_allow_html=True)
 
-# --- 8b. Manual Refresh Button (FIX ADDED) ---
-col_refresh, _ = st.columns([1.5, 8])
-if col_refresh.button("🔄 Refresh Data Now"):
-    st.cache_data.clear()
-    st.rerun()
 
 # --- 9. Load Data ---
 # Initialize Empty
