@@ -3,11 +3,12 @@ import requests
 import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import re
 import os.path
 import base64
+import time
 
 # --- External Libraries ---
 from streamlit_autorefresh import st_autorefresh
@@ -23,7 +24,7 @@ from googleapiclient.errors import HttpError
 # --- 1. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="",
+    page_icon="🎫",
     layout="wide",
 )
 
@@ -284,26 +285,19 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions (VERBOSE ERROR HANDLING) ---
+# --- 6. Gmail Functions (FIXED DATE FILTER) ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
 def get_gmail_service():
-    """
-    Builds and returns a Gmail API service object.
-    Includes explicit error handling to debug the '⚠️' issue.
-    """
+    """Builds and returns a Gmail API service object."""
     creds = None
-    
-    # 1. Check if Secret exists
     if 'GMAIL_TOKEN' not in st.secrets:
         st.error("❌ 'GMAIL_TOKEN' is missing from secrets.toml")
         return None
 
-    # 2. Try to Load Credentials
     try:
         creds_json = st.secrets['GMAIL_TOKEN']
-        # Handle case where secret is a string vs already parsed dict
         if isinstance(creds_json, str):
             creds_info = json.loads(creds_json)
         else:
@@ -317,15 +311,13 @@ def get_gmail_service():
         st.error("❌ Credentials object could not be created.")
         return None
     
-    # 3. Check Expiration & Refresh
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
         except Exception as e:
-            st.error(f"❌ Token Refresh Failed: {e}. You may need to generate a new token.")
+            st.error(f"❌ Token Refresh Failed: {e}. Generate a new token.")
             return None 
 
-    # 4. Build Service
     try:
         service = build('gmail', 'v1', credentials=creds)
         return service
@@ -351,15 +343,16 @@ def get_email_body(payload):
     stop=stop_after_attempt(3), 
     retry=retry_if_exception_type((HttpError, TimeoutError, Exception))
 )
-def get_priority_ticket_set(_service, today_str):
+def get_priority_ticket_set(_service, start_timestamp):
     """
-    Searches Gmail for priority tickets.
+    Searches Gmail for priority tickets since midnight.
     """
     if not _service: 
         return set()
 
-    # Improved Gmail Query
-    query = '("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") newer_than:1d'
+    # --- FIX: USE ABSOLUTE TIMESTAMP INSTEAD OF RELATIVE 'newer_than' ---
+    # This prevents the "rolling 24h" problem where yesterday's 4pm ticket shows up today
+    query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") after:{start_timestamp}'
     
     print(f"DEBUG: Gmail Query = {query}") 
     
@@ -385,21 +378,28 @@ def get_priority_ticket_set(_service, today_str):
                     subject = h['value']
                     break
             
-            payload = response.get('payload', {})
-            body = get_email_body(payload)
-            search_text = f"{subject} {body} {snippet}"
-            
-            found_tickets = ticket_regex.findall(search_text)
-            if found_tickets:
-                for ticket in found_tickets:
-                    # Normalize string (remove spaces, uppercase) -> TKTS-1234
+            # --- FIX: PRIORITIZE SUBJECT LINE ---
+            # If the subject has the ID, don't even check the body (prevents picking up footer IDs)
+            found_in_subject = ticket_regex.findall(subject)
+            if found_in_subject:
+                for ticket in found_in_subject:
                     normalized_ticket = ticket.replace(" ", "").upper()
                     unique_ticket_ids.add(normalized_ticket)
-                    print(f"DEBUG: Found Ticket: {normalized_ticket}")
+                    print(f"DEBUG: Found Ticket in SUBJECT: {normalized_ticket}")
+            else:
+                # Only check body if not found in subject
+                payload = response.get('payload', {})
+                body = get_email_body(payload)
+                search_text = f"{body} {snippet}"
+                found_tickets = ticket_regex.findall(search_text)
+                if found_tickets:
+                    for ticket in found_tickets:
+                        normalized_ticket = ticket.replace(" ", "").upper()
+                        unique_ticket_ids.add(normalized_ticket)
+                        print(f"DEBUG: Found Ticket in BODY: {normalized_ticket}")
         else:
             print(f"Warning: Failed to get specific email: {exception}")
 
-    # Fetch up to 50 emails to be safe
     for message in messages[:50]: 
         batch.add(_service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set)
     
@@ -471,13 +471,17 @@ priority_is_error = False
 gmail_service = get_gmail_service()
 
 if gmail_service is None:
-    # Error already displayed by get_gmail_service
     priority_display_value = "⚠️"
     priority_is_error = True
 else:
     try:
-        today_str = "" 
-        priority_ticket_set = get_priority_ticket_set(gmail_service, today_str)
+        # --- FIX: CALCULATE MIDNIGHT TIMESTAMP (UTC) ---
+        # This aligns with JIRA's "Start of Day"
+        today_midnight = datetime.combine(datetime.now(timezone.utc).date(), datetime.min.time())
+        # Subtract 1 second to be safe, though 'after' is exclusive
+        midnight_timestamp = int(today_midnight.timestamp())
+        
+        priority_ticket_set = get_priority_ticket_set(gmail_service, midnight_timestamp)
         priority_display_value = str(len(priority_ticket_set))
     except RetryError as e:
         st.error(f"Gmail Connection Timeout: {e}")
