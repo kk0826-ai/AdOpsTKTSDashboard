@@ -27,22 +27,24 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- 2. Altair Global Theme (UPDATED FIX) ---
+# --- 2. Altair Global Theme (FIXED) ---
 def set_altair_theme():
     """Sets a global Altair theme to use 'Manrope' font."""
     font = "Manrope"
-    # Using alt.theme instead of alt.themes to fix deprecation warning
-    alt.theme.register("my_theme", lambda: {
-        "config": {
-            "font": font,
-            "title": {"font": font, "fontSize": 14},
-            "header": {"font": font, "labelFont": font},
-            "axis": {"font": font, "labelFont": font, "titleFont": font},
-            "legend": {"font": font, "labelFont": font, "titleFont": font},
-            "text": {"font": font},
+    
+    # FIX: Correct syntax for Altair 5 theme registration
+    @alt.theme.register("my_theme", enable=True)
+    def my_theme():
+        return {
+            "config": {
+                "font": font,
+                "title": {"font": font, "fontSize": 14},
+                "header": {"font": font, "labelFont": font},
+                "axis": {"font": font, "labelFont": font, "titleFont": font},
+                "legend": {"font": font, "labelFont": font, "titleFont": font},
+                "text": {"font": font},
+            }
         }
-    })
-    alt.theme.enable("my_theme")
 
 set_altair_theme()
 
@@ -122,7 +124,6 @@ def load_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    # Updated JQL: Added quotes to statuses to be safe
     jql_query = """
         project = TKTS AND 
         issuetype in ("ANZ - Advanced Pixels", "ANZ - Audio Creatives", "ANZ - Bespoke Requests", "ANZ - Brand Lift Study Creatives", "ANZ - CTV and BVOD Creatives", "ANZ - Celtra Creatives", "ANZ - DCO Creatives", "ANZ - DOOH Creatives", "ANZ - Display Creatives", "ANZ - HTML5 Hosted Creatives", "ANZ - Native Creatives", "ANZ - Rejected Creatives", "ANZ - Social Boost Creatives", "ANZ - Standard Pixels", "ANZ - Troubleshooting - Creatives", "ANZ - Troubleshooting - Pixels", "ANZ - Video Creatives", "DE - Audio Creatives", "DE - Bespoke Requests", "DE - CTV Creatives", "DE - Celtra Creatives", "DE - Display Creatives", "DE - Native Creatives", "DE - Troubleshooting Creatives", "DE - Video Creatives", "IN - Audio Creatives", "IN - Bespoke Requests", "IN - Brand Lift Study Creatives", "IN - CTV/OTT Creatives", "IN - DCO Creatives", "IN - Display Creatives", "IN - Native Creatives", "IN - Troubleshooting Requests", "IN - Video Creatives", "Lenovo - Bespoke Request", "Lenovo - Display Creatives", "Lenovo - Trackers", "Lenovo - Troubleshooting", "Lenovo - Video Creatives", "MENA - Bespoke Requests", "MENA - Display Creatives", "MENA - Native Creatives", "MENA - Troubleshooting Creatives", "MENA - Video Creatives", "SEA - Audio Creatives", "SEA - Bespoke Requests", "SEA - Celtra Creatives", "SEA - DOOH Creatives", "SEA - Display Creatives", "SEA - Native Creatives", "SEA - Troubleshooting Creatives", "SEA - Video Creatives", "SEA - OMG/Assembly Creatives", "UK - Ad-Lib Creatives", "UK - Audio Creatives", "UK - Bespoke Requests", "UK - CTV Creatives", "UK - Celtra Creatives", "UK - Customer Match Creatives", "UK - Display Creatives", "UK - Native Creatives", "UK - Skin Creatives", "UK - Stories Creatives", "UK - THG - Creatives and Trackers", "UK - Troubleshooting Creatives", "UK - Video Creatives", "China - Bespoke Request", "China - Inbound", "MENA - Celtra Creatives", "IN - Customer Match Creatives", "ANZ - SeenThis Creatives - Self-serve only", "SEA - SeenThis Creatives - Self-serve only", "IN - SeenThis Creatives - Self-serve only", "UK - SeenThis Creatives - Self-serve only", "MENA - SeenThis Creatives - Self-serve only", "SEA - DCO Creatives", "MENA - CTV Creatives", "SEA - OTT Creatives") AND 
@@ -178,7 +179,6 @@ def load_jira_data():
     df['campaign_start_date'] = df['campaign_start_china'].fillna(df['campaign_start_main'])
 
     # --- FIX 1: FILTER OUT CLOSED TICKETS ---
-    # Case-insensitive check to remove tickets that might be "Resolved" or "Done" but leaked through
     if not df.empty:
         df = df[~df['status'].str.lower().isin(["closed", "done", "resolved", "cancelled", "rejected"])]
 
@@ -280,7 +280,7 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions (UPDATED FIXES) ---
+# --- 6. Gmail Functions ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
@@ -345,7 +345,6 @@ def get_priority_ticket_set(_service, today_str):
         return set()
 
     # --- FIX 2: IMPROVED GMAIL QUERY ---
-    # using 'newer_than:1d' handles timezones better than date matching
     query = '("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") newer_than:1d'
     
     print(f"DEBUG: Gmail Query = {query}") 
@@ -358,7 +357,6 @@ def get_priority_ticket_set(_service, today_str):
         return set()
 
     unique_ticket_ids = set()
-    # Improved regex: insensitive, handles spaces "TKTS - 123"
     ticket_regex = re.compile(r'TKTS\s*-\s*\d+', re.IGNORECASE)
     
     batch = _service.new_batch_http_request()
