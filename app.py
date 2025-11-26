@@ -23,25 +23,28 @@ from googleapiclient.errors import HttpError
 # --- 1. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="",
+    page_icon="🎫",
     layout="wide",
 )
 
-# --- 2. Altair Global Theme ---
+# --- 2. Altair Global Theme (THE FIX IS HERE) ---
 def set_altair_theme():
     """Sets a global Altair theme to use 'Manrope' font."""
     font = "Manrope"
-    alt.themes.register("my_theme", lambda: {
-        "config": {
-            "font": font,
-            "title": {"font": font, "fontSize": 14},
-            "header": {"font": font, "labelFont": font},
-            "axis": {"font": font, "labelFont": font, "titleFont": font},
-            "legend": {"font": font, "labelFont": font, "titleFont": font},
-            "text": {"font": font},
+    
+    # WE USE THE DECORATOR SYNTAX HERE TO PREVENT THE ERROR
+    @alt.theme.register("my_theme", enable=True)
+    def my_theme():
+        return {
+            "config": {
+                "font": font,
+                "title": {"font": font, "fontSize": 14},
+                "header": {"font": font, "labelFont": font},
+                "axis": {"font": font, "labelFont": font, "titleFont": font},
+                "legend": {"font": font, "labelFont": font, "titleFont": font},
+                "text": {"font": font},
+            }
         }
-    })
-    alt.themes.enable("my_theme")
 
 set_altair_theme()
 
@@ -121,11 +124,10 @@ def load_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    # (Your original long JQL query)
     jql_query = """
         project = TKTS AND 
         issuetype in ("ANZ - Advanced Pixels", "ANZ - Audio Creatives", "ANZ - Bespoke Requests", "ANZ - Brand Lift Study Creatives", "ANZ - CTV and BVOD Creatives", "ANZ - Celtra Creatives", "ANZ - DCO Creatives", "ANZ - DOOH Creatives", "ANZ - Display Creatives", "ANZ - HTML5 Hosted Creatives", "ANZ - Native Creatives", "ANZ - Rejected Creatives", "ANZ - Social Boost Creatives", "ANZ - Standard Pixels", "ANZ - Troubleshooting - Creatives", "ANZ - Troubleshooting - Pixels", "ANZ - Video Creatives", "DE - Audio Creatives", "DE - Bespoke Requests", "DE - CTV Creatives", "DE - Celtra Creatives", "DE - Display Creatives", "DE - Native Creatives", "DE - Troubleshooting Creatives", "DE - Video Creatives", "IN - Audio Creatives", "IN - Bespoke Requests", "IN - Brand Lift Study Creatives", "IN - CTV/OTT Creatives", "IN - DCO Creatives", "IN - Display Creatives", "IN - Native Creatives", "IN - Troubleshooting Requests", "IN - Video Creatives", "Lenovo - Bespoke Request", "Lenovo - Display Creatives", "Lenovo - Trackers", "Lenovo - Troubleshooting", "Lenovo - Video Creatives", "MENA - Bespoke Requests", "MENA - Display Creatives", "MENA - Native Creatives", "MENA - Troubleshooting Creatives", "MENA - Video Creatives", "SEA - Audio Creatives", "SEA - Bespoke Requests", "SEA - Celtra Creatives", "SEA - DOOH Creatives", "SEA - Display Creatives", "SEA - Native Creatives", "SEA - Troubleshooting Creatives", "SEA - Video Creatives", "SEA - OMG/Assembly Creatives", "UK - Ad-Lib Creatives", "UK - Audio Creatives", "UK - Bespoke Requests", "UK - CTV Creatives", "UK - Celtra Creatives", "UK - Customer Match Creatives", "UK - Display Creatives", "UK - Native Creatives", "UK - Skin Creatives", "UK - Stories Creatives", "UK - THG - Creatives and Trackers", "UK - Troubleshooting Creatives", "UK - Video Creatives", "China - Bespoke Request", "China - Inbound", "MENA - Celtra Creatives", "IN - Customer Match Creatives", "ANZ - SeenThis Creatives - Self-serve only", "SEA - SeenThis Creatives - Self-serve only", "IN - SeenThis Creatives - Self-serve only", "UK - SeenThis Creatives - Self-serve only", "MENA - SeenThis Creatives - Self-serve only", "SEA - DCO Creatives", "MENA - CTV Creatives", "SEA - OTT Creatives") AND 
-        status in ("In Progress", Open, Reopened, "Waiting for customer", "Waiting for support")
+        status in ("In Progress", "Open", "Reopened", "Waiting for customer", "Waiting for support")
     """
     
     fields_to_request = ["status", "assignee", "created", "project", "issuetype", "customfield_10704", "customfield_10522", "customfield_16020"]
@@ -175,6 +177,11 @@ def load_jira_data():
     df['campaign_start_main'] = pd.to_datetime(df['campaign_start_main'], utc=True, errors='coerce')
     df['campaign_start_china'] = pd.to_datetime(df['campaign_start_china'], utc=True, errors='coerce')
     df['campaign_start_date'] = df['campaign_start_china'].fillna(df['campaign_start_main'])
+
+    # --- FIX: FILTER OUT CLOSED TICKETS ---
+    if not df.empty:
+        df = df[~df['status'].str.lower().isin(["closed", "done", "resolved", "cancelled", "rejected"])]
+
     return df
 
 
@@ -273,14 +280,14 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions (UPDATED FIXES) ---
+# --- 6. Gmail Functions (UPDATED) ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
 def get_gmail_service():
     """
     Builds and returns a Gmail API service object.
-    UPDATED: Includes auto-refresh logic for expired tokens.
+    Includes auto-refresh logic for expired tokens.
     """
     creds = None
     if 'GMAIL_TOKEN' in st.secrets:
@@ -297,7 +304,7 @@ def get_gmail_service():
         print("Gmail token not found in Secrets.")
         return None
     
-    # --- FIX: Check expiration and refresh ---
+    # Check expiration and refresh
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
@@ -333,22 +340,25 @@ def get_email_body(payload):
 def get_priority_ticket_set(_service, today_str):
     """
     Searches Gmail for priority tickets.
-    UPDATED: Retries on failure and DOES NOT return empty set on error.
     """
     if not _service: 
         return set()
 
-    query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") after:{today_str}'
+    # --- FIX: IMPROVED GMAIL QUERY ---
+    query = '("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") newer_than:1d'
     
-    # Allow this to raise an exception so @retry works
+    print(f"DEBUG: Gmail Query = {query}") 
+    
     results = _service.users().messages().list(userId='me', q=query).execute()
     messages = results.get('messages', [])
     
     if not messages:
+        print("DEBUG: No emails found matching criteria.")
         return set()
 
     unique_ticket_ids = set()
-    ticket_regex = re.compile(r'TKTS-\d+', re.IGNORECASE)
+    ticket_regex = re.compile(r'TKTS\s*-\s*\d+', re.IGNORECASE)
+    
     batch = _service.new_batch_http_request()
     
     def add_tickets_to_set(request_id, response, exception):
@@ -363,15 +373,19 @@ def get_priority_ticket_set(_service, today_str):
             
             payload = response.get('payload', {})
             body = get_email_body(payload)
-            search_text = subject + " " + (body if body else snippet)
+            search_text = f"{subject} {body} {snippet}"
             
             found_tickets = ticket_regex.findall(search_text)
             if found_tickets:
                 for ticket in found_tickets:
-                    unique_ticket_ids.add(ticket.upper())
+                    # Normalize string (remove spaces, uppercase) -> TKTS-1234
+                    normalized_ticket = ticket.replace(" ", "").upper()
+                    unique_ticket_ids.add(normalized_ticket)
+                    print(f"DEBUG: Found Ticket: {normalized_ticket}")
         else:
             print(f"Warning: Failed to get specific email: {exception}")
 
+    # Fetch up to 50 emails to be safe
     for message in messages[:50]: 
         batch.add(_service.users().messages().get(userId='me', id=message['id'], format='full'), callback=add_tickets_to_set)
     
@@ -435,7 +449,7 @@ except RetryError as e:
 except Exception as e:
     st.error(f"Error loading DAILY metrics: {e}", icon="📉")
 
-# Block 3: Priority Tickets (UPDATED LOGIC)
+# Block 3: Priority Tickets
 priority_ticket_set = set()
 priority_display_value = "0"
 priority_is_error = False
@@ -447,7 +461,7 @@ if gmail_service is None:
     priority_is_error = True
 else:
     try:
-        today_str = datetime.now(timezone.utc).strftime('%Y/%m/%d')
+        today_str = "" 
         priority_ticket_set = get_priority_ticket_set(gmail_service, today_str)
         priority_display_value = str(len(priority_ticket_set))
     except RetryError:
@@ -493,7 +507,6 @@ tab_dashboard, tab_explorer, tab_lookup = st.tabs(["SUMMARY", "EXPLORE", "TKTS L
 # === TAB 1: DASHBOARD (ALIGNMENT FIXED) ===
 with tab_dashboard:
     with st.container(border=True):
-        # FIXED ALIGNMENT: Replaced the [1, 2, 2, 2, 2, 2, 2, 1] spacing with equal spacing [1,1,1,1,1,1]
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         
         col1.markdown(f"<div style='text-align:center;'><h3 style='color:orange; margin:0;'>{total_tickets}</h3><p style='margin:0;'>TKTS Active</p></div>", unsafe_allow_html=True)
@@ -502,7 +515,7 @@ with tab_dashboard:
         col4.markdown(f"<div style='text-align:center;'><h3 style='color:blue; margin:0;'>{created_today_count}</h3><p style='margin:0;'>TKTS Created Today</p></div>", unsafe_allow_html=True)
         col5.markdown(f"<div style='text-align:center;'><h3 style='color:purple; margin:0;'>{closed_today_count}</h3><p style='margin:0;'>TKTS Closed Today</p></div>", unsafe_allow_html=True)
         
-        # UPDATED PRIORITY CARD
+        # PRIORITY CARD
         col6.markdown(f"""
         <div style='text-align:center;'>
             <h3 style='color:#FFC300; margin:0;'>{priority_display_value}*</h3>
