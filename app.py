@@ -27,12 +27,12 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- 2. Altair Global Theme (THE FIX IS HERE) ---
+# --- 2. Altair Global Theme (FIXED) ---
 def set_altair_theme():
     """Sets a global Altair theme to use 'Manrope' font."""
     font = "Manrope"
     
-    # WE USE THE DECORATOR SYNTAX HERE TO PREVENT THE ERROR
+    # Correct syntax for Altair 5+
     @alt.theme.register("my_theme", enable=True)
     def my_theme():
         return {
@@ -120,10 +120,12 @@ def build_html_table(df, columns, link_column_key=None, link_text_col_key=None):
 @st.cache_data(ttl=300)
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_jira_data():
-    """Loads ACTIVE tickets based on specific JQL."""
-    url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
+    """Loads ACTIVE tickets with PAGINATION to fetch ALL results."""
+    # Using the standard endpoint (more stable than search/jql)
+    url = f"{JIRA_DOMAIN}/rest/api/3/search"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
+    # Restored your specific list of issue types
     jql_query = """
         project = TKTS AND 
         issuetype in ("ANZ - Advanced Pixels", "ANZ - Audio Creatives", "ANZ - Bespoke Requests", "ANZ - Brand Lift Study Creatives", "ANZ - CTV and BVOD Creatives", "ANZ - Celtra Creatives", "ANZ - DCO Creatives", "ANZ - DOOH Creatives", "ANZ - Display Creatives", "ANZ - HTML5 Hosted Creatives", "ANZ - Native Creatives", "ANZ - Rejected Creatives", "ANZ - Social Boost Creatives", "ANZ - Standard Pixels", "ANZ - Troubleshooting - Creatives", "ANZ - Troubleshooting - Pixels", "ANZ - Video Creatives", "DE - Audio Creatives", "DE - Bespoke Requests", "DE - CTV Creatives", "DE - Celtra Creatives", "DE - Display Creatives", "DE - Native Creatives", "DE - Troubleshooting Creatives", "DE - Video Creatives", "IN - Audio Creatives", "IN - Bespoke Requests", "IN - Brand Lift Study Creatives", "IN - CTV/OTT Creatives", "IN - DCO Creatives", "IN - Display Creatives", "IN - Native Creatives", "IN - Troubleshooting Requests", "IN - Video Creatives", "Lenovo - Bespoke Request", "Lenovo - Display Creatives", "Lenovo - Trackers", "Lenovo - Troubleshooting", "Lenovo - Video Creatives", "MENA - Bespoke Requests", "MENA - Display Creatives", "MENA - Native Creatives", "MENA - Troubleshooting Creatives", "MENA - Video Creatives", "SEA - Audio Creatives", "SEA - Bespoke Requests", "SEA - Celtra Creatives", "SEA - DOOH Creatives", "SEA - Display Creatives", "SEA - Native Creatives", "SEA - Troubleshooting Creatives", "SEA - Video Creatives", "SEA - OMG/Assembly Creatives", "UK - Ad-Lib Creatives", "UK - Audio Creatives", "UK - Bespoke Requests", "UK - CTV Creatives", "UK - Celtra Creatives", "UK - Customer Match Creatives", "UK - Display Creatives", "UK - Native Creatives", "UK - Skin Creatives", "UK - Stories Creatives", "UK - THG - Creatives and Trackers", "UK - Troubleshooting Creatives", "UK - Video Creatives", "China - Bespoke Request", "China - Inbound", "MENA - Celtra Creatives", "IN - Customer Match Creatives", "ANZ - SeenThis Creatives - Self-serve only", "SEA - SeenThis Creatives - Self-serve only", "IN - SeenThis Creatives - Self-serve only", "UK - SeenThis Creatives - Self-serve only", "MENA - SeenThis Creatives - Self-serve only", "SEA - DCO Creatives", "MENA - CTV Creatives", "SEA - OTT Creatives") AND 
@@ -132,39 +134,59 @@ def load_jira_data():
     
     fields_to_request = ["status", "assignee", "created", "project", "issuetype", "customfield_10704", "customfield_10522", "customfield_16020"]
 
-    payload = json.dumps({"jql": jql_query, "fields": fields_to_request, "maxResults": 1000})
-    response = requests.post(url, headers=headers, data=payload, auth=JIRA_AUTH, timeout=10)
-    response.raise_for_status()
-    data = response.json()
-
     issues_list = []
-    for issue in data.get('issues', []):
-        request_type = "N/A"
-        if issue['fields'].get('issuetype'):
-            request_type = issue['fields']['issuetype']['name']
-        
-        breach_time = pd.NaT 
-        sla_field = issue['fields'].get('customfield_10704') 
-        
-        if sla_field: 
-            try:
-                breach_time = sla_field['ongoingCycle']['breachTime']['iso8601']
-            except (KeyError, TypeError, AttributeError):
-                try:
-                    breach_time = sla_field['completedCycles'][-1]['breachTime']['iso8601']
-                except (KeyError, TypeError, AttributeError, IndexError):
-                    pass 
-        
-        issues_list.append({
-            "key": issue['key'],
-            "status": issue['fields']['status']['name'],
-            "assignee": (issue['fields']['assignee']['displayName'] if issue['fields']['assignee'] else "Unassigned"),
-            "created": issue['fields']['created'],
-            "request_type": request_type, 
-            "breach_time_api": breach_time,
-            "campaign_start_main": issue['fields'].get("customfield_10522"),
-            "campaign_start_china": issue['fields'].get("customfield_16020")
+    start_at = 0
+    max_results = 100  # Jira Cloud limit per page
+    total = 1 # dummy value to start loop
+
+    # --- FIX: PAGINATION LOOP ---
+    while start_at < total:
+        payload = json.dumps({
+            "jql": jql_query,
+            "fields": fields_to_request,
+            "startAt": start_at,
+            "maxResults": max_results
         })
+        
+        response = requests.post(url, headers=headers, data=payload, auth=JIRA_AUTH, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+        
+        fetched_issues = data.get('issues', [])
+        if not fetched_issues:
+            break
+            
+        total = data.get('total', 0)
+        
+        for issue in fetched_issues:
+            request_type = "N/A"
+            if issue['fields'].get('issuetype'):
+                request_type = issue['fields']['issuetype']['name']
+            
+            breach_time = pd.NaT 
+            sla_field = issue['fields'].get('customfield_10704') 
+            
+            if sla_field: 
+                try:
+                    breach_time = sla_field['ongoingCycle']['breachTime']['iso8601']
+                except (KeyError, TypeError, AttributeError):
+                    try:
+                        breach_time = sla_field['completedCycles'][-1]['breachTime']['iso8601']
+                    except (KeyError, TypeError, AttributeError, IndexError):
+                        pass 
+            
+            issues_list.append({
+                "key": issue['key'],
+                "status": issue['fields']['status']['name'],
+                "assignee": (issue['fields']['assignee']['displayName'] if issue['fields']['assignee'] else "Unassigned"),
+                "created": issue['fields']['created'],
+                "request_type": request_type, 
+                "breach_time_api": breach_time,
+                "campaign_start_main": issue['fields'].get("customfield_10522"),
+                "campaign_start_china": issue['fields'].get("customfield_16020")
+            })
+        
+        start_at += len(fetched_issues) # Prepare for next page
 
     st.session_state['last_fetch_time'] = datetime.now()
 
@@ -178,7 +200,7 @@ def load_jira_data():
     df['campaign_start_china'] = pd.to_datetime(df['campaign_start_china'], utc=True, errors='coerce')
     df['campaign_start_date'] = df['campaign_start_china'].fillna(df['campaign_start_main'])
 
-    # --- FIX: FILTER OUT CLOSED TICKETS ---
+    # Filter out closed tickets just in case
     if not df.empty:
         df = df[~df['status'].str.lower().isin(["closed", "done", "resolved", "cancelled", "rejected"])]
 
@@ -188,31 +210,51 @@ def load_jira_data():
 @st.cache_data(ttl=300)
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_all_jira_data():
-    """Loads tickets CREATED or RESOLVED today."""
-    url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
+    """Loads tickets CREATED or RESOLVED today with PAGINATION."""
+    url = f"{JIRA_DOMAIN}/rest/api/3/search"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     jql_query = "project = TKTS AND (created >= startOfDay() OR resolutiondate >= startOfDay())"
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
-    payload = json.dumps({"jql": jql_query, "fields": fields_to_request, "maxResults": 1000})
-    response = requests.post(url, headers=headers, data=payload, auth=JIRA_AUTH, timeout=15)
-    response.raise_for_status()
-    data = response.json()
-
     issues = []
-    for issue in data.get("issues", []):
-        fields = issue["fields"]
-        assignee = fields.get('assignee')['displayName'] if fields.get('assignee') else "Unassigned"
-        request_type = fields.get('issuetype')['name'] if fields.get('issuetype') else "N/A"
-        
-        issues.append({
-            "key": issue["key"],
-            "created": fields["created"],
-            "resolutiondate": fields.get("resolutiondate"),
-            "status": fields["status"]["name"],
-            "assignee": assignee,
-            "request_type": request_type
+    start_at = 0
+    max_results = 100
+    total = 1
+
+    # --- FIX: PAGINATION LOOP ---
+    while start_at < total:
+        payload = json.dumps({
+            "jql": jql_query,
+            "fields": fields_to_request,
+            "startAt": start_at,
+            "maxResults": max_results
         })
+        
+        response = requests.post(url, headers=headers, data=payload, auth=JIRA_AUTH, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+        
+        fetched_issues = data.get("issues", [])
+        if not fetched_issues:
+            break
+            
+        total = data.get('total', 0)
+
+        for issue in fetched_issues:
+            fields = issue["fields"]
+            assignee = fields.get('assignee')['displayName'] if fields.get('assignee') else "Unassigned"
+            request_type = fields.get('issuetype')['name'] if fields.get('issuetype') else "N/A"
+            
+            issues.append({
+                "key": issue["key"],
+                "created": fields["created"],
+                "resolutiondate": fields.get("resolutiondate"),
+                "status": fields["status"]["name"],
+                "assignee": assignee,
+                "request_type": request_type
+            })
+        
+        start_at += len(fetched_issues)
     
     if not issues:
         df = pd.DataFrame(columns=["key", "created", "resolutiondate", "status", "assignee", "request_type"])
@@ -230,23 +272,42 @@ def load_all_jira_data():
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_newly_assigned_tickets():
     """Fetches tickets where assignee CHANGED today."""
-    url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
+    url = f"{JIRA_DOMAIN}/rest/api/3/search"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     jql_query = "project = TKTS AND assignee CHANGED during (startOfDay(), now())"
     fields_to_request = ["assignee", "key"] 
 
-    payload = json.dumps({"jql": jql_query, "fields": fields_to_request, "maxResults": 1000})
-    response = requests.post(url, headers=headers, data=payload, auth=JIRA_AUTH, timeout=15)
-    response.raise_for_status()
-    data = response.json()
+    issues = []
+    start_at = 0
+    max_results = 100
+    total = 1
+
+    while start_at < total:
+        payload = json.dumps({
+            "jql": jql_query, 
+            "fields": fields_to_request, 
+            "startAt": start_at, 
+            "maxResults": max_results
+        })
+        
+        response = requests.post(url, headers=headers, data=payload, auth=JIRA_AUTH, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+        
+        fetched_issues = data.get("issues", [])
+        if not fetched_issues:
+            break
+            
+        total = data.get('total', 0)
+        
+        for issue in fetched_issues:
+            fields = issue.get("fields", {})
+            assignee = fields.get('assignee')['displayName'] if fields.get('assignee') else "Unassigned"
+            issues.append({"key": issue.get("key"), "assignee": assignee})
+            
+        start_at += len(fetched_issues)
     
-    assigned_tickets_list = []
-    for issue in data.get("issues", []):
-        fields = issue.get("fields", {})
-        assignee = fields.get('assignee')['displayName'] if fields.get('assignee') else "Unassigned"
-        assigned_tickets_list.append({"key": issue.get("key"), "assignee": assignee})
-    
-    return assigned_tickets_list
+    return issues
 
 
 @st.cache_data(ttl=60)
