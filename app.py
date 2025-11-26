@@ -27,12 +27,11 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- 2. Altair Global Theme (THE FIX IS HERE) ---
+# --- 2. Altair Global Theme ---
 def set_altair_theme():
     """Sets a global Altair theme to use 'Manrope' font."""
     font = "Manrope"
     
-    # WE USE THE DECORATOR SYNTAX HERE TO PREVENT THE ERROR
     @alt.theme.register("my_theme", enable=True)
     def my_theme():
         return {
@@ -178,7 +177,8 @@ def load_jira_data():
     df['campaign_start_china'] = pd.to_datetime(df['campaign_start_china'], utc=True, errors='coerce')
     df['campaign_start_date'] = df['campaign_start_china'].fillna(df['campaign_start_main'])
 
-    # --- FIX: FILTER OUT CLOSED TICKETS ---
+    # --- FIX 1: FILTER OUT CLOSED TICKETS ---
+    # This removes any ticket that might have slipped through the JQL query due to status mapping issues
     if not df.empty:
         df = df[~df['status'].str.lower().isin(["closed", "done", "resolved", "cancelled", "rejected"])]
 
@@ -344,7 +344,8 @@ def get_priority_ticket_set(_service, today_str):
     if not _service: 
         return set()
 
-    # --- FIX: IMPROVED GMAIL QUERY ---
+    # --- FIX 2: IMPROVED GMAIL QUERY ---
+    # Changed from 'after:date' to 'newer_than:1d' to handle timezones better
     query = '("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") newer_than:1d'
     
     print(f"DEBUG: Gmail Query = {query}") 
