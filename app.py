@@ -120,9 +120,9 @@ def build_html_table(df, columns, link_column_key=None, link_text_col_key=None):
 @st.cache_data(ttl=300)
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_jira_data():
-    """Loads ACTIVE tickets with PAGINATION to fetch ALL results."""
-    # Using the standard endpoint (more stable than search/jql)
-    url = f"{JIRA_DOMAIN}/rest/api/3/search"
+    """Loads ACTIVE tickets with PAGINATION using API v2."""
+    # --- FIX: Switched to API v2 to fix '410 Gone' error ---
+    url = f"{JIRA_DOMAIN}/rest/api/2/search"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
     # Restored your specific list of issue types
@@ -139,7 +139,7 @@ def load_jira_data():
     max_results = 100  # Jira Cloud limit per page
     total = 1 # dummy value to start loop
 
-    # --- FIX: PAGINATION LOOP ---
+    # --- PAGINATION LOOP ---
     while start_at < total:
         payload = json.dumps({
             "jql": jql_query,
@@ -210,8 +210,9 @@ def load_jira_data():
 @st.cache_data(ttl=300)
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_all_jira_data():
-    """Loads tickets CREATED or RESOLVED today with PAGINATION."""
-    url = f"{JIRA_DOMAIN}/rest/api/3/search"
+    """Loads tickets CREATED or RESOLVED today with PAGINATION using API v2."""
+    # --- FIX: Switched to API v2 ---
+    url = f"{JIRA_DOMAIN}/rest/api/2/search"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     jql_query = "project = TKTS AND (created >= startOfDay() OR resolutiondate >= startOfDay())"
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
@@ -221,7 +222,7 @@ def load_all_jira_data():
     max_results = 100
     total = 1
 
-    # --- FIX: PAGINATION LOOP ---
+    # --- PAGINATION LOOP ---
     while start_at < total:
         payload = json.dumps({
             "jql": jql_query,
@@ -272,7 +273,8 @@ def load_all_jira_data():
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_newly_assigned_tickets():
     """Fetches tickets where assignee CHANGED today."""
-    url = f"{JIRA_DOMAIN}/rest/api/3/search"
+    # --- FIX: Switched to API v2 ---
+    url = f"{JIRA_DOMAIN}/rest/api/2/search"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     jql_query = "project = TKTS AND assignee CHANGED during (startOfDay(), now())"
     fields_to_request = ["assignee", "key"] 
@@ -318,7 +320,8 @@ def get_ticket_details(ticket_key):
     if not re.fullmatch(r'TKTS-\d+', ticket_key, re.IGNORECASE):
         raise ValueError(f"Invalid ticket format.")
 
-    url = f"{JIRA_DOMAIN}/rest/api/3/issue/{ticket_key.upper()}"
+    # --- FIX: Switched to API v2 ---
+    url = f"{JIRA_DOMAIN}/rest/api/2/issue/{ticket_key.upper()}"
     headers = {"Accept": "application/json"}
     params = {"fields": "status,assignee,created,resolutiondate,issuetype"}
 
