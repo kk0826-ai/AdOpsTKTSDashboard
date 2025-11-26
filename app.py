@@ -27,12 +27,11 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- 2. Altair Global Theme (THE FIX IS HERE) ---
+# --- 2. Altair Global Theme ---
 def set_altair_theme():
     """Sets a global Altair theme to use 'Manrope' font."""
     font = "Manrope"
     
-    # WE USE THE DECORATOR SYNTAX HERE TO PREVENT THE ERROR
     @alt.theme.register("my_theme", enable=True)
     def my_theme():
         return {
@@ -124,10 +123,12 @@ def load_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
+    # --- FIX 1: ADDED 'ORDER BY created DESC' TO ENSURE NEWEST TICKETS ARE FETCHED ---
     jql_query = """
         project = TKTS AND 
         issuetype in ("ANZ - Advanced Pixels", "ANZ - Audio Creatives", "ANZ - Bespoke Requests", "ANZ - Brand Lift Study Creatives", "ANZ - CTV and BVOD Creatives", "ANZ - Celtra Creatives", "ANZ - DCO Creatives", "ANZ - DOOH Creatives", "ANZ - Display Creatives", "ANZ - HTML5 Hosted Creatives", "ANZ - Native Creatives", "ANZ - Rejected Creatives", "ANZ - Social Boost Creatives", "ANZ - Standard Pixels", "ANZ - Troubleshooting - Creatives", "ANZ - Troubleshooting - Pixels", "ANZ - Video Creatives", "DE - Audio Creatives", "DE - Bespoke Requests", "DE - CTV Creatives", "DE - Celtra Creatives", "DE - Display Creatives", "DE - Native Creatives", "DE - Troubleshooting Creatives", "DE - Video Creatives", "IN - Audio Creatives", "IN - Bespoke Requests", "IN - Brand Lift Study Creatives", "IN - CTV/OTT Creatives", "IN - DCO Creatives", "IN - Display Creatives", "IN - Native Creatives", "IN - Troubleshooting Requests", "IN - Video Creatives", "Lenovo - Bespoke Request", "Lenovo - Display Creatives", "Lenovo - Trackers", "Lenovo - Troubleshooting", "Lenovo - Video Creatives", "MENA - Bespoke Requests", "MENA - Display Creatives", "MENA - Native Creatives", "MENA - Troubleshooting Creatives", "MENA - Video Creatives", "SEA - Audio Creatives", "SEA - Bespoke Requests", "SEA - Celtra Creatives", "SEA - DOOH Creatives", "SEA - Display Creatives", "SEA - Native Creatives", "SEA - Troubleshooting Creatives", "SEA - Video Creatives", "SEA - OMG/Assembly Creatives", "UK - Ad-Lib Creatives", "UK - Audio Creatives", "UK - Bespoke Requests", "UK - CTV Creatives", "UK - Celtra Creatives", "UK - Customer Match Creatives", "UK - Display Creatives", "UK - Native Creatives", "UK - Skin Creatives", "UK - Stories Creatives", "UK - THG - Creatives and Trackers", "UK - Troubleshooting Creatives", "UK - Video Creatives", "China - Bespoke Request", "China - Inbound", "MENA - Celtra Creatives", "IN - Customer Match Creatives", "ANZ - SeenThis Creatives - Self-serve only", "SEA - SeenThis Creatives - Self-serve only", "IN - SeenThis Creatives - Self-serve only", "UK - SeenThis Creatives - Self-serve only", "MENA - SeenThis Creatives - Self-serve only", "SEA - DCO Creatives", "MENA - CTV Creatives", "SEA - OTT Creatives") AND 
         status in ("In Progress", "Open", "Reopened", "Waiting for customer", "Waiting for support")
+        ORDER BY created DESC
     """
     
     fields_to_request = ["status", "assignee", "created", "project", "issuetype", "customfield_10704", "customfield_10522", "customfield_16020"]
@@ -178,7 +179,6 @@ def load_jira_data():
     df['campaign_start_china'] = pd.to_datetime(df['campaign_start_china'], utc=True, errors='coerce')
     df['campaign_start_date'] = df['campaign_start_china'].fillna(df['campaign_start_main'])
 
-    # --- FIX: FILTER OUT CLOSED TICKETS ---
     if not df.empty:
         df = df[~df['status'].str.lower().isin(["closed", "done", "resolved", "cancelled", "rejected"])]
 
@@ -191,7 +191,9 @@ def load_all_jira_data():
     """Loads tickets CREATED or RESOLVED today."""
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    jql_query = "project = TKTS AND (created >= startOfDay() OR resolutiondate >= startOfDay())"
+    
+    # --- FIX 2: ADDED 'ORDER BY created DESC' ---
+    jql_query = "project = TKTS AND (created >= startOfDay() OR resolutiondate >= startOfDay()) ORDER BY created DESC"
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
     payload = json.dumps({"jql": jql_query, "fields": fields_to_request, "maxResults": 1000})
@@ -232,7 +234,9 @@ def load_newly_assigned_tickets():
     """Fetches tickets where assignee CHANGED today."""
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    jql_query = "project = TKTS AND assignee CHANGED during (startOfDay(), now())"
+    
+    # --- FIX 3: ADDED 'ORDER BY updated DESC' ---
+    jql_query = "project = TKTS AND assignee CHANGED during (startOfDay(), now()) ORDER BY updated DESC"
     fields_to_request = ["assignee", "key"] 
 
     payload = json.dumps({"jql": jql_query, "fields": fields_to_request, "maxResults": 1000})
@@ -280,43 +284,53 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions (UPDATED) ---
+# --- 6. Gmail Functions (VERBOSE ERROR HANDLING ADDED) ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
 def get_gmail_service():
     """
     Builds and returns a Gmail API service object.
-    Includes auto-refresh logic for expired tokens.
+    Includes explicit error handling to debug the '⚠️' issue.
     """
     creds = None
-    if 'GMAIL_TOKEN' in st.secrets:
-        try:
-            # Load credentials from secret
-            creds_json = st.secrets['GMAIL_TOKEN']
+    
+    # 1. Check if Secret exists
+    if 'GMAIL_TOKEN' not in st.secrets:
+        st.error("❌ 'GMAIL_TOKEN' is missing from secrets.toml")
+        return None
+
+    # 2. Try to Load Credentials
+    try:
+        creds_json = st.secrets['GMAIL_TOKEN']
+        # Handle case where secret is a string vs already parsed dict
+        if isinstance(creds_json, str):
             creds_info = json.loads(creds_json)
-            creds = Credentials.from_authorized_user_info(creds_info, SCOPES)
-        except Exception as e:
-            print(f"Error loading Gmail secrets: {e}")
-            return None
+        else:
+            creds_info = creds_json    
+        creds = Credentials.from_authorized_user_info(creds_info, SCOPES)
+    except Exception as e:
+        st.error(f"❌ JSON Parsing Error: {e}")
+        return None
 
     if not creds:
-        print("Gmail token not found in Secrets.")
+        st.error("❌ Credentials object could not be created.")
         return None
     
-    # Check expiration and refresh
+    # 3. Check Expiration & Refresh
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
         except Exception as e:
-            print(f"Failed to refresh Gmail token: {e}")
-            return None # Fail gracefully
+            st.error(f"❌ Token Refresh Failed: {e}. You may need to generate a new token.")
+            return None 
 
+    # 4. Build Service
     try:
         service = build('gmail', 'v1', credentials=creds)
         return service
     except Exception as e:
-        print(f"Error building Gmail service: {e}")
+        st.error(f"❌ Service Build Error: {e}")
         return None
 
 def get_email_body(payload):
@@ -344,7 +358,7 @@ def get_priority_ticket_set(_service, today_str):
     if not _service: 
         return set()
 
-    # --- FIX: IMPROVED GMAIL QUERY ---
+    # Improved Gmail Query
     query = '("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") newer_than:1d'
     
     print(f"DEBUG: Gmail Query = {query}") 
@@ -427,6 +441,11 @@ button { border-radius: 0px !important; }
 # --- 8. Header ---
 st.markdown("""<div class="header-container"><div class="header-text">TKTS Dashboard</div></div>""", unsafe_allow_html=True)
 
+# --- 8b. Manual Refresh Button (FIX ADDED) ---
+col_refresh, _ = st.columns([1.5, 8])
+if col_refresh.button("🔄 Refresh Data Now"):
+    st.cache_data.clear()
+    st.rerun()
 
 # --- 9. Load Data ---
 # Initialize Empty
@@ -457,6 +476,7 @@ priority_is_error = False
 gmail_service = get_gmail_service()
 
 if gmail_service is None:
+    # Error already displayed by get_gmail_service
     priority_display_value = "⚠️"
     priority_is_error = True
 else:
@@ -464,11 +484,12 @@ else:
         today_str = "" 
         priority_ticket_set = get_priority_ticket_set(gmail_service, today_str)
         priority_display_value = str(len(priority_ticket_set))
-    except RetryError:
+    except RetryError as e:
+        st.error(f"Gmail Connection Timeout: {e}")
         priority_display_value = "⚠️"
         priority_is_error = True
     except Exception as e:
-        st.warning(f"Gmail Error: {e}")
+        st.error(f"Gmail Search Error: {e}")
         priority_display_value = "⚠️"
         priority_is_error = True
 
