@@ -4,7 +4,7 @@ import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
 from datetime import datetime, timezone, timedelta
-from zoneinfo import ZoneInfo  # --- NEW: For Timezone Locking ---
+from zoneinfo import ZoneInfo
 import json
 import re
 import os.path
@@ -25,13 +25,11 @@ from googleapiclient.errors import HttpError
 # --- 1. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="",
+    page_icon="🎫",
     layout="wide",
 )
 
 # --- CONFIGURATION: SET THE PROJECT TIMEZONE ---
-# We force the dashboard to calculate "Today" based on India Time.
-# This ensures UK users see the tickets raised by India earlier in the day.
 PROJECT_TIMEZONE = ZoneInfo("Asia/Kolkata") 
 
 # --- 2. Altair Global Theme ---
@@ -199,13 +197,13 @@ def load_all_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- FIX: HARDCODE THE DATE STRING (No more vague startOfDay()) ---
+    # --- TIMEZONE FIX ---
     now_ist = datetime.now(PROJECT_TIMEZONE)
     midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
-    # Jira expects YYYY-MM-DD HH:mm for explicit comparison
     jql_date_str = midnight_ist.strftime("%Y-%m-%d %H:%M")
     
-    jql_query = f'project = TKTS AND (created >= "{jql_date_str}" OR resolutiondate >= "{jql_date_str}") ORDER BY created DESC'
+    # --- SUB-TASK FIX: Exclude Sub-tasks so counts match standard dashboard ---
+    jql_query = f'project = TKTS AND issuetype NOT IN ("Sub-task") AND (created >= "{jql_date_str}" OR resolutiondate >= "{jql_date_str}") ORDER BY created DESC'
     
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
@@ -248,12 +246,13 @@ def load_newly_assigned_tickets():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- FIX: HARDCODE THE DATE STRING ---
+    # --- TIMEZONE FIX ---
     now_ist = datetime.now(PROJECT_TIMEZONE)
     midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
     jql_date_str = midnight_ist.strftime("%Y-%m-%d %H:%M")
     
-    jql_query = f'project = TKTS AND assignee CHANGED after "{jql_date_str}" ORDER BY updated DESC'
+    # --- SUB-TASK FIX ---
+    jql_query = f'project = TKTS AND issuetype NOT IN ("Sub-task") AND assignee CHANGED after "{jql_date_str}" ORDER BY updated DESC'
     
     fields_to_request = ["assignee", "key"] 
 
@@ -533,6 +532,7 @@ within_sla_count = len(df[df['SLA_Status'] == '✅ Within SLA'])
 now_in_proj = datetime.now(PROJECT_TIMEZONE)
 today_date_proj = now_in_proj.date()
 
+# IMPORTANT: Ensure 'created' is localized to PROJECT_TIMEZONE before extracting date
 df_all["created_date"] = df_all["created"].dt.tz_convert(PROJECT_TIMEZONE).dt.date
 df_all["resolved_date"] = df_all["resolutiondate"].dt.tz_convert(PROJECT_TIMEZONE).dt.date
 
@@ -644,6 +644,27 @@ with tab_dashboard:
 
 # === TAB 2: EXPLORE ===
 with tab_explorer:
+    # --- ADDED AUDIT SECTION ---
+    st.subheader(f"📋 Audit: Tickets Created Today ({created_today_count})")
+    with st.expander("Show list of tickets created today", expanded=True):
+        # Re-use the dataframe calculated for the metric
+        audit_created = df_all[(df_all["created_date"] == today_date_proj) & (df_all['request_type'] != "China - Outbound")].copy()
+        
+        if not audit_created.empty:
+            # Add a link column
+            audit_created['Link'] = audit_created['key'].apply(lambda k: f"{JIRA_DOMAIN}/browse/{k}")
+            audit_created['Link_Text'] = "View"
+            
+            # Format columns (Time in Project TZ)
+            audit_created['Created Time'] = audit_created['created'].dt.tz_convert(PROJECT_TIMEZONE).dt.strftime('%H:%M')
+            
+            cols = {'key': 'Ticket', 'Link':'', 'request_type': 'Type', 'assignee': 'Assignee', 'Created Time': 'Time (IST)'}
+            st.markdown(build_html_table(audit_created, cols, "Link", "Link_Text"), unsafe_allow_html=True)
+        else:
+            st.info("No tickets created today.")
+
+    st.divider()
+
     # Active Filter
     st.header("Filter Open TKTS by Assignee")
     with st.container(border=True):
@@ -664,7 +685,6 @@ with tab_explorer:
     # Closed Today
     st.header(f"Closed TKTS by Assignee on ({today_date_proj.strftime('%d-%b-%Y')})")
     with st.container(border=True):
-        # Filter strictly by PROJ DATE
         closed_today = df_all[(df_all["resolved_date"] == today_date_proj) & (~df_all['assignee'].isin(["Adops-EA Group", "Ganesh Balasaheb Zaware"])) & (df_all['request_type'] != "China - Outbound")]
         if closed_today.empty:
             st.info("No tickets closed today.")
@@ -724,4 +744,3 @@ if st.toggle("Auto-refresh (every 5 minutes)", value=True):
 
 if 'last_fetch_time' in st.session_state:
     st.caption(f"Data last refreshed: {st.session_state['last_fetch_time'].strftime('%Y-%m-%d %H:%M:%S')}")
-
