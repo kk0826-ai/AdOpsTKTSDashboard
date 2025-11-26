@@ -27,12 +27,12 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- 2. Altair Global Theme (FIXED) ---
+# --- 2. Altair Global Theme (THE FIX IS HERE) ---
 def set_altair_theme():
     """Sets a global Altair theme to use 'Manrope' font."""
     font = "Manrope"
     
-    # FIX: Correct syntax for Altair 5 theme registration
+    # WE USE THE DECORATOR SYNTAX HERE TO PREVENT THE ERROR
     @alt.theme.register("my_theme", enable=True)
     def my_theme():
         return {
@@ -178,7 +178,7 @@ def load_jira_data():
     df['campaign_start_china'] = pd.to_datetime(df['campaign_start_china'], utc=True, errors='coerce')
     df['campaign_start_date'] = df['campaign_start_china'].fillna(df['campaign_start_main'])
 
-    # --- FIX 1: FILTER OUT CLOSED TICKETS ---
+    # --- FIX: FILTER OUT CLOSED TICKETS ---
     if not df.empty:
         df = df[~df['status'].str.lower().isin(["closed", "done", "resolved", "cancelled", "rejected"])]
 
@@ -280,7 +280,7 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions ---
+# --- 6. Gmail Functions (UPDATED) ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
@@ -344,7 +344,7 @@ def get_priority_ticket_set(_service, today_str):
     if not _service: 
         return set()
 
-    # --- FIX 2: IMPROVED GMAIL QUERY ---
+    # --- FIX: IMPROVED GMAIL QUERY ---
     query = '("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") newer_than:1d'
     
     print(f"DEBUG: Gmail Query = {query}") 
@@ -449,7 +449,7 @@ except RetryError as e:
 except Exception as e:
     st.error(f"Error loading DAILY metrics: {e}", icon="📉")
 
-# Block 3: Priority Tickets (UPDATED LOGIC)
+# Block 3: Priority Tickets
 priority_ticket_set = set()
 priority_display_value = "0"
 priority_is_error = False
@@ -461,7 +461,6 @@ if gmail_service is None:
     priority_is_error = True
 else:
     try:
-        # Not using date string anymore, relying on newer_than:1d in the function
         today_str = "" 
         priority_ticket_set = get_priority_ticket_set(gmail_service, today_str)
         priority_display_value = str(len(priority_ticket_set))
