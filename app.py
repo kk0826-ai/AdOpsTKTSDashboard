@@ -3,11 +3,13 @@ import requests
 import pandas as pd
 import altair as alt
 from requests.auth import HTTPBasicAuth
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo  # --- NEW: For Timezone Locking ---
 import json
 import re
 import os.path
 import base64
+import time
 
 # --- External Libraries ---
 from streamlit_autorefresh import st_autorefresh
@@ -23,25 +25,32 @@ from googleapiclient.errors import HttpError
 # --- 1. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="",
+    page_icon="🎫",
     layout="wide",
 )
+
+# --- CONFIGURATION: SET THE PROJECT TIMEZONE ---
+# We force the dashboard to calculate "Today" based on India Time.
+# This ensures UK users see the tickets raised by India earlier in the day.
+PROJECT_TIMEZONE = ZoneInfo("Asia/Kolkata") 
 
 # --- 2. Altair Global Theme ---
 def set_altair_theme():
     """Sets a global Altair theme to use 'Manrope' font."""
     font = "Manrope"
-    alt.themes.register("my_theme", lambda: {
-        "config": {
-            "font": font,
-            "title": {"font": font, "fontSize": 14},
-            "header": {"font": font, "labelFont": font},
-            "axis": {"font": font, "labelFont": font, "titleFont": font},
-            "legend": {"font": font, "labelFont": font, "titleFont": font},
-            "text": {"font": font},
+    
+    @alt.theme.register("my_theme", enable=True)
+    def my_theme():
+        return {
+            "config": {
+                "font": font,
+                "title": {"font": font, "fontSize": 14},
+                "header": {"font": font, "labelFont": font},
+                "axis": {"font": font, "labelFont": font, "titleFont": font},
+                "legend": {"font": font, "labelFont": font, "titleFont": font},
+                "text": {"font": font},
+            }
         }
-    })
-    alt.themes.enable("my_theme")
 
 set_altair_theme()
 
@@ -121,11 +130,12 @@ def load_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    # (Your original long JQL query)
+    # --- JQL with ORDER BY created DESC ---
     jql_query = """
         project = TKTS AND 
         issuetype in ("ANZ - Advanced Pixels", "ANZ - Audio Creatives", "ANZ - Bespoke Requests", "ANZ - Brand Lift Study Creatives", "ANZ - CTV and BVOD Creatives", "ANZ - Celtra Creatives", "ANZ - DCO Creatives", "ANZ - DOOH Creatives", "ANZ - Display Creatives", "ANZ - HTML5 Hosted Creatives", "ANZ - Native Creatives", "ANZ - Rejected Creatives", "ANZ - Social Boost Creatives", "ANZ - Standard Pixels", "ANZ - Troubleshooting - Creatives", "ANZ - Troubleshooting - Pixels", "ANZ - Video Creatives", "DE - Audio Creatives", "DE - Bespoke Requests", "DE - CTV Creatives", "DE - Celtra Creatives", "DE - Display Creatives", "DE - Native Creatives", "DE - Troubleshooting Creatives", "DE - Video Creatives", "IN - Audio Creatives", "IN - Bespoke Requests", "IN - Brand Lift Study Creatives", "IN - CTV/OTT Creatives", "IN - DCO Creatives", "IN - Display Creatives", "IN - Native Creatives", "IN - Troubleshooting Requests", "IN - Video Creatives", "Lenovo - Bespoke Request", "Lenovo - Display Creatives", "Lenovo - Trackers", "Lenovo - Troubleshooting", "Lenovo - Video Creatives", "MENA - Bespoke Requests", "MENA - Display Creatives", "MENA - Native Creatives", "MENA - Troubleshooting Creatives", "MENA - Video Creatives", "SEA - Audio Creatives", "SEA - Bespoke Requests", "SEA - Celtra Creatives", "SEA - DOOH Creatives", "SEA - Display Creatives", "SEA - Native Creatives", "SEA - Troubleshooting Creatives", "SEA - Video Creatives", "SEA - OMG/Assembly Creatives", "UK - Ad-Lib Creatives", "UK - Audio Creatives", "UK - Bespoke Requests", "UK - CTV Creatives", "UK - Celtra Creatives", "UK - Customer Match Creatives", "UK - Display Creatives", "UK - Native Creatives", "UK - Skin Creatives", "UK - Stories Creatives", "UK - THG - Creatives and Trackers", "UK - Troubleshooting Creatives", "UK - Video Creatives", "China - Bespoke Request", "China - Inbound", "MENA - Celtra Creatives", "IN - Customer Match Creatives", "ANZ - SeenThis Creatives - Self-serve only", "SEA - SeenThis Creatives - Self-serve only", "IN - SeenThis Creatives - Self-serve only", "UK - SeenThis Creatives - Self-serve only", "MENA - SeenThis Creatives - Self-serve only", "SEA - DCO Creatives", "MENA - CTV Creatives", "SEA - OTT Creatives") AND 
-        status in ("In Progress", Open, Reopened, "Waiting for customer", "Waiting for support")
+        status in ("In Progress", "Open", "Reopened", "Waiting for customer", "Waiting for support")
+        ORDER BY created DESC
     """
     
     fields_to_request = ["status", "assignee", "created", "project", "issuetype", "customfield_10704", "customfield_10522", "customfield_16020"]
@@ -175,16 +185,28 @@ def load_jira_data():
     df['campaign_start_main'] = pd.to_datetime(df['campaign_start_main'], utc=True, errors='coerce')
     df['campaign_start_china'] = pd.to_datetime(df['campaign_start_china'], utc=True, errors='coerce')
     df['campaign_start_date'] = df['campaign_start_china'].fillna(df['campaign_start_main'])
+
+    if not df.empty:
+        df = df[~df['status'].str.lower().isin(["closed", "done", "resolved", "cancelled", "rejected"])]
+
     return df
 
 
 @st.cache_data(ttl=300)
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_all_jira_data():
-    """Loads tickets CREATED or RESOLVED today."""
+    """Loads tickets CREATED or RESOLVED today (based on IST)."""
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    jql_query = "project = TKTS AND (created >= startOfDay() OR resolutiondate >= startOfDay())"
+    
+    # --- FIX: HARDCODE THE DATE STRING (No more vague startOfDay()) ---
+    now_ist = datetime.now(PROJECT_TIMEZONE)
+    midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Jira expects YYYY-MM-DD HH:mm for explicit comparison
+    jql_date_str = midnight_ist.strftime("%Y-%m-%d %H:%M")
+    
+    jql_query = f'project = TKTS AND (created >= "{jql_date_str}" OR resolutiondate >= "{jql_date_str}") ORDER BY created DESC'
+    
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
     payload = json.dumps({"jql": jql_query, "fields": fields_to_request, "maxResults": 1000})
@@ -222,10 +244,17 @@ def load_all_jira_data():
 @st.cache_data(ttl=300)
 @retry(wait=wait_fixed(2), stop=stop_after_attempt(3), retry=retry_if_exception_type(requests.RequestException))
 def load_newly_assigned_tickets():
-    """Fetches tickets where assignee CHANGED today."""
+    """Fetches tickets where assignee CHANGED today (based on IST)."""
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    jql_query = "project = TKTS AND assignee CHANGED during (startOfDay(), now())"
+    
+    # --- FIX: HARDCODE THE DATE STRING ---
+    now_ist = datetime.now(PROJECT_TIMEZONE)
+    midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    jql_date_str = midnight_ist.strftime("%Y-%m-%d %H:%M")
+    
+    jql_query = f'project = TKTS AND assignee CHANGED after "{jql_date_str}" ORDER BY updated DESC'
+    
     fields_to_request = ["assignee", "key"] 
 
     payload = json.dumps({"jql": jql_query, "fields": fields_to_request, "maxResults": 1000})
@@ -273,43 +302,44 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions (UPDATED FIXES) ---
+# --- 6. Gmail Functions (FIXED DATE FILTER TO PROJECT TIMEZONE) ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
 def get_gmail_service():
-    """
-    Builds and returns a Gmail API service object.
-    UPDATED: Includes auto-refresh logic for expired tokens.
-    """
+    """Builds and returns a Gmail API service object."""
     creds = None
-    if 'GMAIL_TOKEN' in st.secrets:
-        try:
-            # Load credentials from secret
-            creds_json = st.secrets['GMAIL_TOKEN']
+    if 'GMAIL_TOKEN' not in st.secrets:
+        st.error("❌ 'GMAIL_TOKEN' is missing from secrets.toml")
+        return None
+
+    try:
+        creds_json = st.secrets['GMAIL_TOKEN']
+        if isinstance(creds_json, str):
             creds_info = json.loads(creds_json)
-            creds = Credentials.from_authorized_user_info(creds_info, SCOPES)
-        except Exception as e:
-            print(f"Error loading Gmail secrets: {e}")
-            return None
+        else:
+            creds_info = creds_json    
+        creds = Credentials.from_authorized_user_info(creds_info, SCOPES)
+    except Exception as e:
+        st.error(f"❌ JSON Parsing Error: {e}")
+        return None
 
     if not creds:
-        print("Gmail token not found in Secrets.")
+        st.error("❌ Credentials object could not be created.")
         return None
     
-    # --- FIX: Check expiration and refresh ---
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
         except Exception as e:
-            print(f"Failed to refresh Gmail token: {e}")
-            return None # Fail gracefully
+            st.error(f"❌ Token Refresh Failed: {e}. Generate a new token.")
+            return None 
 
     try:
         service = build('gmail', 'v1', credentials=creds)
         return service
     except Exception as e:
-        print(f"Error building Gmail service: {e}")
+        st.error(f"❌ Service Build Error: {e}")
         return None
 
 def get_email_body(payload):
@@ -330,25 +360,28 @@ def get_email_body(payload):
     stop=stop_after_attempt(3), 
     retry=retry_if_exception_type((HttpError, TimeoutError, Exception))
 )
-def get_priority_ticket_set(_service, today_str):
+def get_priority_ticket_set(_service, start_timestamp):
     """
-    Searches Gmail for priority tickets.
-    UPDATED: Retries on failure and DOES NOT return empty set on error.
+    Searches Gmail for priority tickets since Project Midnight.
     """
     if not _service: 
         return set()
 
-    query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") after:{today_str}'
+    # Query uses the EXACT timestamp for India Midnight
+    query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") after:{start_timestamp}'
     
-    # Allow this to raise an exception so @retry works
+    print(f"DEBUG: Gmail Query = {query}") 
+    
     results = _service.users().messages().list(userId='me', q=query).execute()
     messages = results.get('messages', [])
     
     if not messages:
+        print("DEBUG: No emails found matching criteria.")
         return set()
 
     unique_ticket_ids = set()
-    ticket_regex = re.compile(r'TKTS-\d+', re.IGNORECASE)
+    ticket_regex = re.compile(r'TKTS\s*-\s*\d+', re.IGNORECASE)
+    
     batch = _service.new_batch_http_request()
     
     def add_tickets_to_set(request_id, response, exception):
@@ -361,14 +394,24 @@ def get_priority_ticket_set(_service, today_str):
                     subject = h['value']
                     break
             
-            payload = response.get('payload', {})
-            body = get_email_body(payload)
-            search_text = subject + " " + (body if body else snippet)
-            
-            found_tickets = ticket_regex.findall(search_text)
-            if found_tickets:
-                for ticket in found_tickets:
-                    unique_ticket_ids.add(ticket.upper())
+            # Search Subject First
+            found_in_subject = ticket_regex.findall(subject)
+            if found_in_subject:
+                for ticket in found_in_subject:
+                    normalized_ticket = ticket.replace(" ", "").upper()
+                    unique_ticket_ids.add(normalized_ticket)
+                    print(f"DEBUG: Found Ticket in SUBJECT: {normalized_ticket}")
+            else:
+                # Then Body
+                payload = response.get('payload', {})
+                body = get_email_body(payload)
+                search_text = f"{body} {snippet}"
+                found_tickets = ticket_regex.findall(search_text)
+                if found_tickets:
+                    for ticket in found_tickets:
+                        normalized_ticket = ticket.replace(" ", "").upper()
+                        unique_ticket_ids.add(normalized_ticket)
+                        print(f"DEBUG: Found Ticket in BODY: {normalized_ticket}")
         else:
             print(f"Warning: Failed to get specific email: {exception}")
 
@@ -435,7 +478,7 @@ except RetryError as e:
 except Exception as e:
     st.error(f"Error loading DAILY metrics: {e}", icon="📉")
 
-# Block 3: Priority Tickets (UPDATED LOGIC)
+# Block 3: Priority Tickets
 priority_ticket_set = set()
 priority_display_value = "0"
 priority_is_error = False
@@ -447,14 +490,21 @@ if gmail_service is None:
     priority_is_error = True
 else:
     try:
-        today_str = datetime.now(timezone.utc).strftime('%Y/%m/%d')
-        priority_ticket_set = get_priority_ticket_set(gmail_service, today_str)
+        # --- FIX: CALCULATE MIDNIGHT in PROJECT TIMEZONE ---
+        now_in_project_tz = datetime.now(PROJECT_TIMEZONE)
+        midnight_in_project_tz = now_in_project_tz.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Convert that midnight to Epoch for Gmail
+        midnight_timestamp = int(midnight_in_project_tz.timestamp())
+        
+        priority_ticket_set = get_priority_ticket_set(gmail_service, midnight_timestamp)
         priority_display_value = str(len(priority_ticket_set))
-    except RetryError:
+    except RetryError as e:
+        st.error(f"Gmail Connection Timeout: {e}")
         priority_display_value = "⚠️"
         priority_is_error = True
     except Exception as e:
-        st.warning(f"Gmail Error: {e}")
+        st.error(f"Gmail Search Error: {e}")
         priority_display_value = "⚠️"
         priority_is_error = True
 
@@ -479,12 +529,15 @@ total_tickets = len(df)
 breached_count = len(df[df['SLA_Status'] == '🚨 Breached'])
 within_sla_count = len(df[df['SLA_Status'] == '✅ Within SLA'])
 
-today = pd.Timestamp.now(tz='UTC').date()
-df_all["created_date"] = df_all["created"].dt.date
-df_all["resolved_date"] = df_all["resolutiondate"].dt.date
+# Fix "Today" calculation for display logic
+now_in_proj = datetime.now(PROJECT_TIMEZONE)
+today_date_proj = now_in_proj.date()
 
-created_today_count = len(df_all[(df_all["created_date"] == today) & (df_all['request_type'] != "China - Outbound")])
-closed_today_count = len(df_all[(df_all["resolved_date"] == today) & (df_all['request_type'] != "China - Outbound")])
+df_all["created_date"] = df_all["created"].dt.tz_convert(PROJECT_TIMEZONE).dt.date
+df_all["resolved_date"] = df_all["resolutiondate"].dt.tz_convert(PROJECT_TIMEZONE).dt.date
+
+created_today_count = len(df_all[(df_all["created_date"] == today_date_proj) & (df_all['request_type'] != "China - Outbound")])
+closed_today_count = len(df_all[(df_all["resolved_date"] == today_date_proj) & (df_all['request_type'] != "China - Outbound")])
 
 
 # --- 11. Tabs Layout ---
@@ -493,7 +546,6 @@ tab_dashboard, tab_explorer, tab_lookup = st.tabs(["SUMMARY", "EXPLORE", "TKTS L
 # === TAB 1: DASHBOARD (ALIGNMENT FIXED) ===
 with tab_dashboard:
     with st.container(border=True):
-        # FIXED ALIGNMENT: Replaced the [1, 2, 2, 2, 2, 2, 2, 1] spacing with equal spacing [1,1,1,1,1,1]
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         
         col1.markdown(f"<div style='text-align:center;'><h3 style='color:orange; margin:0;'>{total_tickets}</h3><p style='margin:0;'>TKTS Active</p></div>", unsafe_allow_html=True)
@@ -502,7 +554,7 @@ with tab_dashboard:
         col4.markdown(f"<div style='text-align:center;'><h3 style='color:blue; margin:0;'>{created_today_count}</h3><p style='margin:0;'>TKTS Created Today</p></div>", unsafe_allow_html=True)
         col5.markdown(f"<div style='text-align:center;'><h3 style='color:purple; margin:0;'>{closed_today_count}</h3><p style='margin:0;'>TKTS Closed Today</p></div>", unsafe_allow_html=True)
         
-        # UPDATED PRIORITY CARD
+        # PRIORITY CARD
         col6.markdown(f"""
         <div style='text-align:center;'>
             <h3 style='color:#FFC300; margin:0;'>{priority_display_value}*</h3>
@@ -542,14 +594,14 @@ with tab_dashboard:
 
     # Highlights
     st.divider()
-    st.header(f"Today’s Highlights ({today.strftime('%d-%b-%Y')})")
+    st.header(f"Today’s Highlights ({today_date_proj.strftime('%d-%b-%Y')})")
     st.markdown('<div class="highlights-container">', unsafe_allow_html=True)
     with st.container(border=True):
         col_created, col_resolved = st.columns(2)
         
         with col_created:
             st.subheader("Top 5 Requests types")
-            created_today_df = df_all[df_all["created_date"] == today]
+            created_today_df = df_all[df_all["created_date"] == today_date_proj]
             counts = created_today_df['request_type'].value_counts().drop(["China - Outbound"], errors='ignore').head(5)
             if counts.empty: st.info("No tickets created today.")
             else: st.markdown("\n".join([f"- **{k}:** {v} ticket(s)" for k, v in counts.items()]))
@@ -610,9 +662,10 @@ with tab_explorer:
     st.divider()
     
     # Closed Today
-    st.header(f"Closed TKTS by Assignee on ({today.strftime('%d-%b-%Y')})")
+    st.header(f"Closed TKTS by Assignee on ({today_date_proj.strftime('%d-%b-%Y')})")
     with st.container(border=True):
-        closed_today = df_all[(df_all["resolved_date"] == today) & (~df_all['assignee'].isin(["Adops-EA Group", "Ganesh Balasaheb Zaware"])) & (df_all['request_type'] != "China - Outbound")]
+        # Filter strictly by PROJ DATE
+        closed_today = df_all[(df_all["resolved_date"] == today_date_proj) & (~df_all['assignee'].isin(["Adops-EA Group", "Ganesh Balasaheb Zaware"])) & (df_all['request_type'] != "China - Outbound")]
         if closed_today.empty:
             st.info("No tickets closed today.")
         else:
@@ -628,7 +681,7 @@ with tab_explorer:
     st.divider()
     
     # Priority Details
-    st.header(f"Priority TKTS Details ({today.strftime('%d-%b-%Y')})")
+    st.header(f"Priority TKTS Details ({today_date_proj.strftime('%d-%b-%Y')})")
     with st.container(border=True):
         if not priority_ticket_set:
             st.info("No priority tickets found.")
