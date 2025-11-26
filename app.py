@@ -24,7 +24,7 @@ from googleapiclient.errors import HttpError
 # --- 1. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="🎫",
+    page_icon="",
     layout="wide",
 )
 
@@ -702,3 +702,4 @@ if st.toggle("Auto-refresh (every 5 minutes)", value=True):
 
 if 'last_fetch_time' in st.session_state:
     st.caption(f"Data last refreshed: {st.session_state['last_fetch_time'].strftime('%Y-%m-%d %H:%M:%S')}")
+
