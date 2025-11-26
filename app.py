@@ -8,6 +8,7 @@ import json
 import re
 import os.path
 import base64
+import time
 
 # --- External Libraries ---
 from streamlit_autorefresh import st_autorefresh
@@ -23,7 +24,7 @@ from googleapiclient.errors import HttpError
 # --- 1. Page Configuration ---
 st.set_page_config(
     page_title="TKTS Dashboard",
-    page_icon="",
+    page_icon="🎫",
     layout="wide",
 )
 
@@ -123,9 +124,10 @@ def load_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    # --- JQL with ORDER BY created DESC ---
+    # --- QA CHECK: Includes 'ORDER BY created DESC' and Excludes 'Sub-task' ---
     jql_query = """
         project = TKTS AND 
+        issuetype NOT IN ("Sub-task") AND
         issuetype in ("ANZ - Advanced Pixels", "ANZ - Audio Creatives", "ANZ - Bespoke Requests", "ANZ - Brand Lift Study Creatives", "ANZ - CTV and BVOD Creatives", "ANZ - Celtra Creatives", "ANZ - DCO Creatives", "ANZ - DOOH Creatives", "ANZ - Display Creatives", "ANZ - HTML5 Hosted Creatives", "ANZ - Native Creatives", "ANZ - Rejected Creatives", "ANZ - Social Boost Creatives", "ANZ - Standard Pixels", "ANZ - Troubleshooting - Creatives", "ANZ - Troubleshooting - Pixels", "ANZ - Video Creatives", "DE - Audio Creatives", "DE - Bespoke Requests", "DE - CTV Creatives", "DE - Celtra Creatives", "DE - Display Creatives", "DE - Native Creatives", "DE - Troubleshooting Creatives", "DE - Video Creatives", "IN - Audio Creatives", "IN - Bespoke Requests", "IN - Brand Lift Study Creatives", "IN - CTV/OTT Creatives", "IN - DCO Creatives", "IN - Display Creatives", "IN - Native Creatives", "IN - Troubleshooting Requests", "IN - Video Creatives", "Lenovo - Bespoke Request", "Lenovo - Display Creatives", "Lenovo - Trackers", "Lenovo - Troubleshooting", "Lenovo - Video Creatives", "MENA - Bespoke Requests", "MENA - Display Creatives", "MENA - Native Creatives", "MENA - Troubleshooting Creatives", "MENA - Video Creatives", "SEA - Audio Creatives", "SEA - Bespoke Requests", "SEA - Celtra Creatives", "SEA - DOOH Creatives", "SEA - Display Creatives", "SEA - Native Creatives", "SEA - Troubleshooting Creatives", "SEA - Video Creatives", "SEA - OMG/Assembly Creatives", "UK - Ad-Lib Creatives", "UK - Audio Creatives", "UK - Bespoke Requests", "UK - CTV Creatives", "UK - Celtra Creatives", "UK - Customer Match Creatives", "UK - Display Creatives", "UK - Native Creatives", "UK - Skin Creatives", "UK - Stories Creatives", "UK - THG - Creatives and Trackers", "UK - Troubleshooting Creatives", "UK - Video Creatives", "China - Bespoke Request", "China - Inbound", "MENA - Celtra Creatives", "IN - Customer Match Creatives", "ANZ - SeenThis Creatives - Self-serve only", "SEA - SeenThis Creatives - Self-serve only", "IN - SeenThis Creatives - Self-serve only", "UK - SeenThis Creatives - Self-serve only", "MENA - SeenThis Creatives - Self-serve only", "SEA - DCO Creatives", "MENA - CTV Creatives", "SEA - OTT Creatives") AND 
         status in ("In Progress", "Open", "Reopened", "Waiting for customer", "Waiting for support")
         ORDER BY created DESC
@@ -192,8 +194,7 @@ def load_all_jira_data():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- RESTORED: Uses native JIRA startOfDay() for safety ---
-    # --- KEPT FIX: Excludes Sub-tasks so counts are accurate ---
+    # --- QA CHECK: Excludes Sub-tasks & Sorts by Date ---
     jql_query = 'project = TKTS AND issuetype NOT IN ("Sub-task") AND (created >= startOfDay() OR resolutiondate >= startOfDay()) ORDER BY created DESC'
     
     fields_to_request = ["key", "status", "created", "resolutiondate", "assignee", "issuetype"]
@@ -237,8 +238,7 @@ def load_newly_assigned_tickets():
     url = f"{JIRA_DOMAIN}/rest/api/3/search/jql"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    # --- RESTORED: Uses native JIRA startOfDay() ---
-    # --- KEPT FIX: Excludes Sub-tasks ---
+    # --- QA CHECK: Excludes Sub-tasks & Sorts by Date ---
     jql_query = 'project = TKTS AND issuetype NOT IN ("Sub-task") AND assignee CHANGED during (startOfDay(), now()) ORDER BY updated DESC'
     
     fields_to_request = ["assignee", "key"] 
@@ -288,7 +288,7 @@ def get_ticket_details(ticket_key):
     }
 
 
-# --- 6. Gmail Functions (FIXED DATE FILTER TO LOCAL MIDNIGHT) ---
+# --- 6. Gmail Functions (Robust Error Handling & Time Fix) ---
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 @st.cache_resource
@@ -353,7 +353,7 @@ def get_priority_ticket_set(_service, start_timestamp):
     if not _service: 
         return set()
 
-    # Query uses the EXACT timestamp for Local Midnight
+    # --- QA CHECK: Use strict 'after' timestamp (No rolling 24h) ---
     query = f'("adops-ea@miqdigital.com" OR "adops-emea@miqdigital.com") ("priority" OR "prioritise" OR "prioritize" OR "Urgent") after:{start_timestamp}'
     
     print(f"DEBUG: Gmail Query = {query}") 
@@ -380,15 +380,14 @@ def get_priority_ticket_set(_service, start_timestamp):
                     subject = h['value']
                     break
             
-            # Search Subject First
+            # --- QA CHECK: Check Subject first (to avoid Footer matches) ---
             found_in_subject = ticket_regex.findall(subject)
             if found_in_subject:
                 for ticket in found_in_subject:
                     normalized_ticket = ticket.replace(" ", "").upper()
                     unique_ticket_ids.add(normalized_ticket)
-                    print(f"DEBUG: Found Ticket in SUBJECT: {normalized_ticket}")
             else:
-                # Then Body
+                # Only check body if not found in subject
                 payload = response.get('payload', {})
                 body = get_email_body(payload)
                 search_text = f"{body} {snippet}"
@@ -397,7 +396,6 @@ def get_priority_ticket_set(_service, start_timestamp):
                     for ticket in found_tickets:
                         normalized_ticket = ticket.replace(" ", "").upper()
                         unique_ticket_ids.add(normalized_ticket)
-                        print(f"DEBUG: Found Ticket in BODY: {normalized_ticket}")
         else:
             print(f"Warning: Failed to get specific email: {exception}")
 
@@ -476,7 +474,7 @@ if gmail_service is None:
     priority_is_error = True
 else:
     try:
-        # --- FIX: CALCULATE MIDNIGHT in LOCAL TIME (Computer's Time) ---
+        # --- QA CHECK: Calculate LOCAL Midnight (User's computer time) ---
         local_now = datetime.now()
         local_midnight = datetime(local_now.year, local_now.month, local_now.day)
         midnight_timestamp = int(local_midnight.timestamp())
@@ -704,4 +702,3 @@ if st.toggle("Auto-refresh (every 5 minutes)", value=True):
 
 if 'last_fetch_time' in st.session_state:
     st.caption(f"Data last refreshed: {st.session_state['last_fetch_time'].strftime('%Y-%m-%d %H:%M:%S')}")
-
